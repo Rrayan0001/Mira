@@ -1,0 +1,7 @@
+{
+  "id": "faust",
+  "displayName": "Faust",
+  "description": "Faust is an elegant anime-style desktop pet designed for Codex. She reacts to your cursor with a subtle attention gesture, works continuously with her laptop during active tasks, and shows distinct animations for success, failure, review, and waiting states. With her calm express",
+  "spritesheetPath": "spritesheet.webp",
+  "kind": "person"
+}

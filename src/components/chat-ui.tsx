@@ -6,11 +6,53 @@ import { MOOD_META, type ChatMessage, type Mood, type MoodResult, type Stage } f
 import { MOCK_REPLIES, mockClassify } from "@/lib/mock-mood";
 import { extractName } from "@/lib/session";
 import NamePrompt from "./name-prompt";
+import FaustAvatar from "./faust-avatar";
+import { MOOD_REACTIONS, type FaustStateName } from "@/lib/faust-avatar-player";
 import { isWelcomeDone, subscribeWelcomeDone } from "./welcome-overlay";
 
 type Turn = ChatMessage & { id: string; time: string };
 
 const INITIAL_GREETING = "Hey, it's Mira — I'm really glad you're here. What's your name?";
+
+// Marquee copy per mood — unhinged but SFW. Rendered as two identical
+// halves so the -50% loop is perfectly seamless, repeated 4x per half so
+// the track is always wider than the viewport (mobile → ultrawide).
+// The track remounts (key) on mood change so the loop restarts cleanly.
+const TICKER_BY_MOOD: Record<Mood, string[]> = {
+  neutral: [
+    "MIRA", "SAY IT RAW", "NO BAD VIBES", "CERTIFIED YAPPER", "DELULU BUT CUTE",
+    "EMOTIONAL SUPPORT MENACE", "OVERSHARE FRIENDLY", "MAIN CHARACTER ENERGY",
+    "CRYING IS CARDIO", "TOXIC-FREE ZONE",
+  ],
+  happy: [
+    "MIRA", "GLOW-Y AND PROUD", "MAIN CHARACTER ENERGY", "CERTIFIED YAPPER",
+    "GOOD VIBES ONLY", "CELEBRATION MODE", "UNBOTHERED ROYALTY",
+  ],
+  sad: [
+    "MIRA", "SOFT HOURS OPEN", "CRYING IS CARDIO", "GENTLE ONLY",
+    "NO BAD VIBES", "OVERSHARE FRIENDLY", "FEELINGS WELCOME",
+  ],
+  angry: [
+    "MIRA", "SAY IT RAW", "VENT FREELY", "NO JUDGEMENT ZONE",
+    "FIERY BUT CUTE", "TOXIC-FREE ZONE", "BIG FEELINGS OK",
+  ],
+  anxious: [
+    "MIRA", "SLOW DOWN NOW", "ONE BREATH AT A TIME", "SOFT LANDING",
+    "NO RUSH HERE", "GENTLE ONLY", "THIS WORRY PASSES",
+  ],
+  tired: [
+    "MIRA", "LOW BATTERY MODE", "SOFT ONLY", "REST IS PRODUCTIVE",
+    "NO RUSH HERE", "BLANKET APPROVED", "DOZE FRIENDLY",
+  ],
+  lonely: [
+    "MIRA", "NEVER REALLY ALONE", "STAY A WHILE", "MIDNIGHT COMPANY",
+    "OVERSHARE FRIENDLY", "NO BAD VIBES", "YOU MATTER HERE",
+  ],
+  sacred: [
+    "MIRA", "GLOWING SOFTLY", "STILLNESS ONLY", "PEACEFUL FREQUENCY",
+    "QUIET MAGIC", "REVERENT HOURS", "SOUL CHARGED",
+  ],
+};
 
 function nowTime(): string {
   if (typeof window === "undefined") return "Just now";
@@ -99,6 +141,18 @@ export default function ChatUI() {
   const [streaming, setStreaming] = useState(false);
   const [slowTypingHint, setSlowTypingHint] = useState(false);
 
+  // Faust sprite avatar above the textbox (see companion-avatar-guide.md).
+  const [faustSignal, setFaustSignal] = useState<{
+    state: FaustStateName;
+    holdMs: number;
+    n: number;
+  }>({ state: "idle", holdMs: 0, n: 0 });
+  const [faustFailed, setFaustFailed] = useState(0);
+  const [faustAttentive, setFaustAttentive] = useState(false);
+  const [kbOpen, setKbOpen] = useState(false);
+  const faustMoodRef = useRef<Mood>("neutral");
+  const attnTimerRef = useRef<number | undefined>(undefined);
+
   const meta = MOOD_META[mood.mood] || MOOD_META.neutral;
   // Combined generation flag (typing = awaiting stream start, streaming = tokens arriving)
   const isGenerating = typing || streaming;
@@ -158,6 +212,10 @@ export default function ChatUI() {
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setInput(val);
+    // Avatar hook: typing → she leans in; relax ~2.5s after stopping.
+    setFaustAttentive(true);
+    window.clearTimeout(attnTimerRef.current);
+    attnTimerRef.current = window.setTimeout(() => setFaustAttentive(false), 2500);
     e.target.style.height = "auto";
     const newScrollHeight = e.target.scrollHeight;
     const clampedHeight = Math.max(38, Math.min(newScrollHeight, 140));
@@ -193,6 +251,10 @@ export default function ChatUI() {
       focusComposer();
 
       setTyping(true);
+
+      // Avatar hook: sent → laptop pose (loop="thinking" via typing).
+      window.clearTimeout(attnTimerRef.current);
+      setFaustAttentive(false);
 
       // Optimistic local mood reading for instant UI responsiveness
       const local = mockClassify(text);
@@ -274,6 +336,7 @@ export default function ChatUI() {
 
                 // Update mood and stage metadata as soon as it arrives
                 if (obj.mood) {
+                  faustMoodRef.current = obj.mood;
                   setMood({
                     mood: obj.mood,
                     confidence: obj.confidence ?? 0.8,
@@ -309,6 +372,15 @@ export default function ChatUI() {
             const pool = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
             appendAssistant(pool[0]!);
           }
+          // Avatar hook: stream done → play the mood's reaction, if any.
+          const reaction = MOOD_REACTIONS[faustMoodRef.current];
+          if (reaction) {
+            setFaustSignal((prev) => ({
+              state: reaction.state,
+              holdMs: reaction.holdMs,
+              n: prev.n + 1,
+            }));
+          }
           setStreaming(false);
           focusComposer();
           return;
@@ -336,10 +408,21 @@ export default function ChatUI() {
         if (data.userName && typeof data.userName === "string") {
           setUserName(data.userName);
         }
+        // Avatar hook: JSON reply done → play the mood's reaction, if any.
+        const jsonReaction = data.mood ? MOOD_REACTIONS[data.mood] : null;
+        if (jsonReaction) {
+          setFaustSignal((prev) => ({
+            state: jsonReaction.state,
+            holdMs: jsonReaction.holdMs,
+            n: prev.n + 1,
+          }));
+        }
         appendAssistant(data.reply);
         focusComposer();
       } catch (err) {
         console.error("Chat request failed:", err);
+        // Avatar hook: request failed → red ✗ pose, then idle.
+        setFaustFailed((n) => n + 1);
         setTyping(false);
         setStreaming(false);
         const pool = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
@@ -377,6 +460,7 @@ export default function ChatUI() {
       const isMobile = window.innerWidth <= 640;
       const threshold = window.innerHeight * 0.85;
       const kbOpen = vv.height < threshold;
+      setKbOpen(kbOpen);
       const hero = document.querySelector<HTMLElement>(".chat-centered-hero");
 
       if (isMobile) {
@@ -467,12 +551,16 @@ export default function ChatUI() {
           id="chat-input"
           ref={inputRef}
           className="composer-input"
+          enterKeyHint="send"
+          autoComplete="off"
+          autoCapitalize="sentences"
+          autoCorrect="on"
           placeholder={
             !hasStarted
               ? "Tell me your name… (e.g. Alex)"
               : userName
-              ? `Message Mira, ${userName}… (Shift+Enter for newline)`
-              : "Tell me what’s on your mind… (Shift+Enter for newline)"
+              ? `Message Mira, ${userName}…`
+              : "Tell me what’s on your mind…"
           }
           rows={1}
           value={input}
@@ -546,7 +634,10 @@ export default function ChatUI() {
                   aria-hidden="true"
                 />
                 <span className="mood-prefix">MOOD:</span>
-                <strong className="mood-bold-name" style={{ color: meta.dot }}>
+                <strong
+                  className="mood-bold-name"
+                  style={{ color: meta.dot === "#ffffff" ? "#0a0a0a" : meta.dot }}
+                >
                   {mood.mood.toUpperCase()}
                 </strong>
               </div>
@@ -564,6 +655,26 @@ export default function ChatUI() {
           </div>
         </div>
       </header>
+
+      {/* Brutalist marquee slab — copy follows the detected mood */}
+      <div className="mira-ticker" aria-hidden="true">
+        <div className="mira-ticker-track" key={mood.mood}>
+          {[0, 1].map((half) => (
+            <span key={half} className="mira-ticker-half">
+              {[0, 1, 2, 3].map((rep) => (
+                <span key={rep} className="mira-ticker-seq">
+                  {(TICKER_BY_MOOD[mood.mood] ?? TICKER_BY_MOOD.neutral).map((bit) => (
+                    <span key={bit} className="mira-ticker-bit">
+                      {bit}
+                      <b> ★ </b>
+                    </span>
+                  ))}
+                </span>
+              ))}
+            </span>
+          ))}
+        </div>
+      </div>
 
       {/* Main View: Centered Landing when empty, Active Stream once conversation starts */}
       {!hasStarted ? (
@@ -586,6 +697,10 @@ export default function ChatUI() {
             <p className="centered-hero-subtitle">
               I&apos;m really glad you&apos;re here. Tell me what I should call you so we can get to know each other.
             </p>
+            <div className="hero-stickers" aria-hidden="true">
+              <span className="sticker sticker-black">100% tuned in</span>
+              <span className="sticker sticker-pink">no bad vibes</span>
+            </div>
             <div className="centered-composer-slot">
               {renderComposer(false)}
             </div>
@@ -649,45 +764,15 @@ export default function ChatUI() {
             </div>
           </div>
 
-          {/* Docked Composer Bar */}
+          {/* Docked Composer Bar — Faust sprite stage sits above the textbox */}
           <footer className="composer-section">
-            {/* Interactive generating figure — appears just above the textbox while Mira is replying */}
-            {isGenerating && (
-              <button
-                type="button"
-                className={`mira-generating-figure ${figWiggle ? "is-wiggling" : ""}`}
-                onClick={triggerFigWiggle}
-                aria-label="Mira is replying — tap for a little wave"
-                title="Tap for a little wave"
-              >
-                <span className="mira-gen-avatar" aria-hidden="true">
-                  <img src="/mira-avatar.png" alt="" width={36} height={36} className="mira-avatar-img" />
-                  <span
-                    className="mira-gen-pulse"
-                    style={{ background: meta.dot, boxShadow: `0 0 8px ${meta.dot}` }}
-                  />
-                </span>
-                <span className="mira-gen-text">
-                  <span className="mira-gen-title">
-                    {streaming ? "Mira is writing" : "Mira is thinking"}
-                    {userName ? ` for ${userName}` : ""}…
-                  </span>
-                  <span className="mira-gen-sub">
-                    {streaming ? "pouring her heart out, cutie" : "getting something sweet ready"}
-                  </span>
-                </span>
-                <span className="mira-gen-dots" aria-hidden="true">
-                  <span className="typing-dot" />
-                  <span className="typing-dot" />
-                  <span className="typing-dot" />
-                </span>
-                <span className="mira-gen-hearts" aria-hidden="true">
-                  <span>♡</span>
-                  <span>♡</span>
-                  <span>♡</span>
-                </span>
-              </button>
-            )}
+            <FaustAvatar
+              loop={streaming ? "talking" : typing ? "thinking" : "idle"}
+              signal={faustSignal}
+              failed={faustFailed}
+              attentive={faustAttentive}
+              compact={kbOpen}
+            />
             {renderComposer(true)}
           </footer>
         </>

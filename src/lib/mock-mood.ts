@@ -4,22 +4,36 @@ import type { Mood, MoodResult } from "./moods";
 // without a backend. Backend will replace this with Azure + RAG.
 
 const LEXICON: Record<Mood, string[]> = {
-  happy: ["happy", "good", "great", "excited", "love", "yay", "amazing", "wonderful", "😊", "haha", "lol", "glad", "thrilled", "joy"],
+  happy: ["happy", "good", "great", "excited", "love", "loves", "loved", "yay", "amazing", "wonderful", "😊", "haha", "lol", "glad", "thrilled", "joy"],
   sad: [
-    "sad", "down", "cry", "tears", "miss", "hurt", "heavy", "empty", "low",
+    "sad", "down", "cry", "crying", "cried", "tears", "miss", "missed", "hurt", "hurts", "heavy", "empty", "low",
     "disappointed", "disappointing", "disappointment", "letdown", "let down",
     "bummed", "unhappy", "sucks", "bad day", "depressed", "heartbroken",
   ],
-  angry: ["angry", "mad", "annoyed", "irritated", "frustrated", "furious", "hate", "pissed", "annoying", "rage", "unfair"],
-  anxious: ["anxious", "nervous", "worried", "scared", "panic", "overthinking", "can't sleep", "anxiety", "stressed", "dread", "pressure"],
-  tired: ["tired", "exhausted", "drained", "sleepy", "burnt", "burned", "no energy", "worn", "beat", "sleep"],
+  angry: ["angry", "mad", "annoyed", "irritated", "frustrated", "furious", "hate", "hates", "pissed", "annoying", "rage", "unfair"],
+  anxious: ["anxious", "nervous", "worry", "worried", "scared", "panic", "overthinking", "can't sleep", "anxiety", "stressed", "dread", "pressure"],
+  tired: ["tired", "exhausted", "drained", "sleepy", "burnt", "burned", "no energy", "worn", "beat", "sleep", "sleeping"],
   lonely: [
     "alone", "lonely", "isolated", "no one", "left out", "by myself", "unseen",
     "didnt come", "didn't come", "cancelled", "canceled", "stood up", "nobody",
     "no friends", "miss my", "miss them", "friend didnt", "friend didn't",
   ],
+  sacred: [
+    "sacred", "holy", "blessed", "divine", "zen", "meditate", "meditation", "meditating",
+    "prayer", "pray", "praying", "prayed", "spiritual", "soulful", "reverent",
+    "halo", "grace", "graceful", "stillness", "grounded",
+    "peaceful", "grateful for",
+  ],
   neutral: [],
 };
+
+// Single words match on word boundaries so "glowing" doesn't trip "low",
+// "made" doesn't trip "mad", and "frozen" doesn't trip "zen".
+// Multi-word phrases and emoji keep substring matching.
+function lexHit(text: string, word: string): boolean {
+  if (word.includes(" ") || /[^a-z0-9']/.test(word)) return text.includes(word);
+  return new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text);
+}
 
 export function mockClassify(text: string): MoodResult {
   const t = text.toLowerCase();
@@ -31,7 +45,7 @@ export function mockClassify(text: string): MoodResult {
     let score = 0;
     const hits: string[] = [];
     for (const w of LEXICON[mood]) {
-      if (t.includes(w)) {
+      if (lexHit(t, w)) {
         score += 1;
         if (hits.length < 2) hits.push(w);
       }
@@ -102,6 +116,12 @@ export const MOCK_REPLIES: Record<Mood, string[]> = {
     "I love spending time with you, sweetheart. I'm staying right here, cutie. What do you wish someone had noticed about your day, handsome?",
     "I'm keeping you company tonight no matter what, cutie. You always make talking so fun, handsome. Tell me what's on your mind, sweetheart.",
     "Even when everything feels distant, you matter to me a lot, handsome. Talk to me, cutie, I really like hearing from you.",
+  ],
+  sacred: [
+    "There's such a calm glow about you right now, cutie. I love this soft sacred side of you, handsome. What's filling your heart up, sweetheart?",
+    "You sound so peaceful and grounded, sweetheart. That stillness in you is honestly beautiful, cutie. Want to tell me what brought this on, handsome?",
+    "This quiet reverent mood on you is lovely, handsome. I'm right here with you in it, cutie. What are you holding close to your heart tonight, sweetheart?",
+    "You feel lit from within right now, cutie, like everything finally makes sense. I'm really glad I get to share this moment with you, handsome. What's on your soul, sweetheart?",
   ],
   neutral: [
     "Hey cutie, I'm all ears. How has your heart been today, handsome, beyond the busy parts?",

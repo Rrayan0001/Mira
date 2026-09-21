@@ -1,4 +1,4 @@
-export const MOODS = ["happy", "sad", "angry", "anxious", "tired", "lonely", "neutral"] as const;
+export const MOODS = ["happy", "sad", "angry", "anxious", "tired", "lonely", "sacred", "neutral"] as const;
 export type Mood = (typeof MOODS)[number];
 
 export function isMood(v: unknown): v is Mood {
@@ -86,6 +86,26 @@ export const MOOD_SYNONYMS: Record<string, Mood> = {
   good: "happy",
   great: "happy",
 
+  // sacred / peaceful glow / reverent / grounded
+  sacred: "sacred",
+  holy: "sacred",
+  blessed: "sacred",
+  divine: "sacred",
+  zen: "sacred",
+  meditate: "sacred",
+  meditation: "sacred",
+  prayer: "sacred",
+  pray: "sacred",
+  praying: "sacred",
+  spiritual: "sacred",
+  soulful: "sacred",
+  reverent: "sacred",
+  halo: "sacred",
+  grace: "sacred",
+  graceful: "sacred",
+  stillness: "sacred",
+  grounded: "sacred",
+
   // neutral
   neutral: "neutral",
   calm: "neutral",
@@ -137,11 +157,12 @@ export type Session = {
 };
 
 export const MOOD_META: Record<Mood, { label: string; dot: string; phrase: string }> = {
-  happy: { label: "Light & bright", dot: "#f43f5e", phrase: "you sound glow-y right now" },
-  sad: { label: "Soft & low", dot: "#8aa0a6", phrase: "a little tender, I'm here" },
-  angry: { label: "Heated", dot: "#ab4d2c", phrase: "something's fired you up" },
-  anxious: { label: "Restless", dot: "#c9a86a", phrase: "a bit unsettled, breathe with me" },
-  tired: { label: "Worn out", dot: "#9bb0a0", phrase: "you sound tired, love" },
-  lonely: { label: "Quiet", dot: "#a8a0b8", phrase: "feeling a little alone" },
-  neutral: { label: "Easy", dot: "#8a7a6b", phrase: "steady and easy" },
+  happy: { label: "Light & bright", dot: "#ff2e88", phrase: "you sound glow-y right now" },
+  sad: { label: "Soft & low", dot: "#0a0a0a", phrase: "a little tender, I'm here" },
+  angry: { label: "Heated", dot: "#c4005b", phrase: "something's fired you up" },
+  anxious: { label: "Restless", dot: "#525252", phrase: "a bit unsettled, breathe with me" },
+  tired: { label: "Worn out", dot: "#a3a3a3", phrase: "you sound tired, love" },
+  lonely: { label: "Quiet", dot: "#ff9dc4", phrase: "feeling a little alone" },
+  sacred: { label: "Sacred glow", dot: "#e6006e", phrase: "glowing soft and sacred" },
+  neutral: { label: "Easy", dot: "#ffffff", phrase: "steady and easy" },
 };
