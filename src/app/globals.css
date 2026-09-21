@@ -77,14 +77,14 @@ body {
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
-  /* Prevent iOS rubber-banding from dragging the whole shell when feed scrolls */
-  position: fixed;
-  inset: 0;
-  width: 100%;
 }
 
-@media (min-width: 641px) {
-  body { position: static; inset: auto; }
+@media (max-width: 640px) {
+  body {
+    /* Allow layout viewport to resize for visualViewport keyboard detection */
+    overflow: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 ::selection {
@@ -1001,7 +1001,7 @@ svg { flex-shrink: 0; }
 }
 
 .mira-generating-figure:active {
-  transform: translateX(-50%) translate(3px, 3px);
+  transform: translate(3px, 3px);
   box-shadow: 0 0 0 var(--accent);
 }
 
@@ -1025,7 +1025,7 @@ svg { flex-shrink: 0; }
   position: relative;
   width: 38px;
   height: 38px;
-  border-radius: 6px;
+  border-radius: 50%;
   flex-shrink: 0;
   border: 2px solid var(--accent-border);
   background: linear-gradient(135deg, #ffffff 0%, #f6e8d7 100%);
@@ -1112,6 +1112,44 @@ svg { flex-shrink: 0; }
 @keyframes fig-heart-float {
   0%, 100% { transform: translateY(0) scale(1); opacity: 0.9; }
   50%       { transform: translateY(-6px) scale(1.18); opacity: 1; }
+}
+
+.mira-gen-toast {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text-primary);
+  color: var(--bg-elevated);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.15px;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.22), 3px 3px 0 var(--accent);
+  border: 1.5px solid var(--text-primary);
+  pointer-events: none;
+  animation: fig-toast-pop 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  z-index: 2;
+}
+
+.mira-gen-toast::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid var(--text-primary);
+}
+
+@keyframes fig-toast-pop {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.92); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
 }
 
 @media (max-width: 640px) {
