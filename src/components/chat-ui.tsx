@@ -7,6 +7,7 @@ import { MOCK_REPLIES, mockClassify } from "@/lib/mock-mood";
 import { extractName } from "@/lib/session";
 import NamePrompt from "./name-prompt";
 import FaustAvatar from "./faust-avatar";
+import ThemeToggle from "./theme-toggle";
 import { MOOD_REACTIONS, type FaustStateName } from "@/lib/faust-avatar-player";
 import { isWelcomeDone, subscribeWelcomeDone } from "./welcome-overlay";
 
@@ -652,6 +653,7 @@ export default function ChatUI() {
               <RotateCcw size={13} />
               <span>New chat</span>
             </button>
+            <ThemeToggle />
           </div>
         </div>
       </header>

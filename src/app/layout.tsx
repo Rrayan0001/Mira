@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond, DM_Sans } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
 const serif = Cormorant_Garamond({
@@ -17,6 +18,13 @@ const sans = DM_Sans({
   display: "swap",
 });
 
+const pixel = localFont({
+  src: "../../public/fonts/PressStart2P.woff2",
+  variable: "--font-pixel",
+  display: "swap",
+  weight: "400",
+});
+
 export const metadata: Metadata = {
   title: "Mira",
   description: "A caring, playful, mood-aware companion tuned into you.",
@@ -30,12 +38,17 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#ffffff",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0f0f12" },
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+  ],
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
   interactiveWidget: "resizes-content",
 };
+
+const THEME_BOOT_SCRIPT = `(function(){try{if(localStorage.getItem("mira-theme")==="dark"){document.documentElement.setAttribute("data-theme","dark");}}catch(e){}})();`;
 
 export default function RootLayout({
   children,
@@ -43,7 +56,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${serif.variable} ${sans.variable}`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${serif.variable} ${sans.variable} ${pixel.variable}`}
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body suppressHydrationWarning>{children}</body>
     </html>
   );
