@@ -41,11 +41,11 @@
   --font-serif-fallback: 'Cormorant Garamond', Georgia, serif;
   --font-sans-fallback:  'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
-  /* Radii */
-  --r-sm:  10px;
-  --r-md:  18px;
-  --r-lg:  24px;
-  --r-xl:  32px;
+  /* Radii — boxie brutalism: tight, blocky corners */
+  --r-sm:  6px;
+  --r-md:  8px;
+  --r-lg:  10px;
+  --r-xl:  12px;
   --r-full:999px;
 }
 
@@ -54,6 +54,7 @@
 
 html {
   height: 100%;
+  height: -webkit-fill-available;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -64,6 +65,7 @@ body {
   height: 100%;
   min-height: 100%;
   min-height: 100dvh;
+  min-height: -webkit-fill-available;
   margin: 0;
   padding: 0;
   background: var(--bg-base);
@@ -75,6 +77,14 @@ body {
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  /* Prevent iOS rubber-banding from dragging the whole shell when feed scrolls */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+}
+
+@media (min-width: 641px) {
+  body { position: static; inset: auto; }
 }
 
 ::selection {
@@ -377,12 +387,16 @@ svg { flex-shrink: 0; }
 .app-main {
   height: 100%;
   height: 100dvh;
+  height: -webkit-fill-available;
   width: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-base);
   position: relative;
+  min-height: 0;
+  /* allow dynamic viewport keyboard handling — JS sets --app-height when visualViewport shrinks */
+  min-height: calc(var(--app-height, 100dvh));
 }
 
 /* subtle ambient top glow */
@@ -399,11 +413,14 @@ svg { flex-shrink: 0; }
 .chat-app {
   height: 100%;
   height: 100dvh;
+  height: -webkit-fill-available;
   width: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  min-height: 0;
+  min-height: calc(var(--app-height, 100dvh));
 }
 
 /* ============================================================
@@ -648,6 +665,10 @@ svg { flex-shrink: 0; }
   position: relative;
   z-index: 1;
   scroll-behavior: smooth;
+  min-height: 0;
+  overscroll-behavior: contain;
+  /* reserve space for fixed composer on mobile; desktop unaffected */
+  padding-bottom: 16px;
 }
 
 /* Custom scrollbar */
@@ -923,10 +944,17 @@ svg { flex-shrink: 0; }
   flex-shrink: 0;
   width: 100%;
   padding: 10px max(16px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-  background: linear-gradient(180deg, transparent 0%, var(--bg-base) 30%);
+  background: var(--bg-base);
+  /* gradient fade for feed, but keep solid behind composer so text doesn't bleed */
+  background: linear-gradient(180deg, rgba(255,255,255,0) 0%, var(--bg-base) 28%);
   position: relative;
   z-index: 15;
   animation: composer-dock-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  /* keep composer above keyboard on mobile — flex keeps it docked, but
+     when visualViewport shrinks we pin it via JS variable --kb-offset */
+  transform: translateY(calc(-1 * var(--kb-offset, 0px)));
+  will-change: transform;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes composer-dock-in {
@@ -940,35 +968,40 @@ svg { flex-shrink: 0; }
   }
 }
 
-/* Interactive generating figure — shows above the textbox while Mira replies */
+/* Interactive generating figure — shows above the textbox while Mira replies.
+   Positioned absolute so it does NOT push the textbox off-screen on small phones. */
 .mira-generating-figure {
   display: flex;
   align-items: center;
   gap: 12px;
   width: fit-content;
   max-width: min(92%, 380px);
-  margin: 0 auto 10px;
   padding: 8px 14px 8px 9px;
   background: var(--bg-elevated);
   border: 2px solid var(--text-primary);
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: 4px 4px 0 var(--accent);
   cursor: pointer;
   animation: fig-slide-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
-  position: relative;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
   text-align: left;
   -webkit-tap-highlight-color: transparent;
+  z-index: 2;
+  white-space: nowrap;
 }
 
 .mira-generating-figure:hover {
-  transform: translate(1px, 1px);
+  transform: translateX(-50%) translate(1px, 1px);
   box-shadow: 3px 3px 0 var(--accent);
   background: var(--bg-surface);
 }
 
 .mira-generating-figure:active {
-  transform: translate(3px, 3px);
+  transform: translateX(-50%) translate(3px, 3px);
   box-shadow: 0 0 0 var(--accent);
 }
 
@@ -992,7 +1025,7 @@ svg { flex-shrink: 0; }
   position: relative;
   width: 38px;
   height: 38px;
-  border-radius: 50%;
+  border-radius: 6px;
   flex-shrink: 0;
   border: 2px solid var(--accent-border);
   background: linear-gradient(135deg, #ffffff 0%, #f6e8d7 100%);
@@ -1371,7 +1404,9 @@ svg { flex-shrink: 0; }
 }
 
 /* ============================================================
-   NEO-BRUTALISM LAYER — white + rose classic
+   NEO-BRUTALISM LAYER — white + rose BOXIE edition
+   Chunkier 3px frames, 6px block stamps, 10-14px radii.
+   No new keyframes. Keeps mobile keyboard handling intact.
    Black 2px frames + black hard stamps; rose reserved for
    signature stamps (topbar rule, composer dock) and fills
    (user bubble, send button). No new keyframes.
@@ -1383,16 +1418,16 @@ svg { flex-shrink: 0; }
   box-shadow: 0 4px 0 var(--accent);
 }
 
-/* ---- Pills / tags / buttons: black frame + black stamp ---- */
+/* ---- Pills / tags / buttons: boxie — 6px, blocky stamp ---- */
 .brand-user-tag {
   border: 2px solid var(--text-primary);
-  border-radius: 12px;
+  border-radius: 6px;
   box-shadow: 2px 2px 0 var(--text-primary);
 }
 
 .topbar-mood-tag {
   border: 2px solid var(--text-primary);
-  border-radius: 12px;
+  border-radius: 6px;
   box-shadow: 3px 3px 0 var(--text-primary);
 }
 
@@ -1402,13 +1437,13 @@ svg { flex-shrink: 0; }
 }
 
 .topbar-mood-tag:active {
-  transform: translate(3px, 3px);
+  transform: translate(4px, 4px);
   box-shadow: 0 0 0 var(--text-primary);
 }
 
 .reset-chat-btn {
   border: 2px solid var(--text-primary);
-  border-radius: 12px;
+  border-radius: 6px;
   box-shadow: 3px 3px 0 var(--text-primary);
 }
 
@@ -1418,13 +1453,13 @@ svg { flex-shrink: 0; }
 }
 
 .reset-chat-btn:active {
-  transform: translate(3px, 3px) scale(0.96);
+  transform: translate(4px, 4px) scale(0.96);
   box-shadow: 0 0 0 var(--text-primary);
 }
 
 .welcome-skip {
   border: 2px solid var(--text-primary);
-  border-radius: 12px;
+  border-radius: 6px;
   box-shadow: 3px 3px 0 var(--text-primary);
 }
 
@@ -1434,70 +1469,85 @@ svg { flex-shrink: 0; }
 }
 
 .welcome-skip:active {
-  transform: translate(3px, 3px);
+  transform: translate(4px, 4px);
   box-shadow: 0 0 0 var(--text-primary);
 }
 
-/* ---- Avatars: black frame + black stamp, pulse animation untouched ---- */
+/* ---- Avatars: boxie square-ish, pulse untouched ---- */
 .mira-avatar-header,
 .bubble-avatar,
 .centered-avatar-wrap {
-  border: 2px solid var(--text-primary);
-  box-shadow: 3px 3px 0 var(--text-primary);
+  border: 2.5px solid var(--text-primary);
+  box-shadow: 4px 4px 0 var(--text-primary);
+}
+
+.mira-avatar-header {
+  border-radius: 8px;
+}
+
+.bubble-avatar {
+  border-radius: 8px;
 }
 
 .centered-avatar-wrap {
-  border-radius: 18px;
+  border-radius: 10px;
 }
 
 .centered-avatar-wrap .centered-avatar-img {
-  border-radius: 16px;
+  border-radius: 7px;
 }
 
-/* ---- Bubbles: black frames + black hard offsets (rose fill on user) ---- */
+.mira-avatar-img {
+  border-radius: 6px;
+}
+
+/* ---- Bubbles: boxie — 8px block, sharp tail, hard stamp ---- */
 .bubble-assistant {
   border: 2px solid var(--text-primary);
-  box-shadow: 0 2px 16px rgba(20, 20, 20, 0.10),
+  border-radius: 10px 10px 10px 0;
+  box-shadow: 0 2px 12px rgba(20, 20, 20, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.6),
     4px 4px 0 var(--text-primary);
 }
 
 .bubble-user {
   border: 2px solid var(--text-primary);
-  box-shadow: 0 2px 16px rgba(244, 63, 94, 0.25),
+  border-radius: 10px 10px 0 10px;
+  box-shadow: 0 2px 12px rgba(244, 63, 94, 0.20),
     4px 4px 0 var(--text-primary);
 }
 
 .typing-bubble {
   border: 2px solid var(--text-primary);
-  box-shadow: 0 2px 14px rgba(20, 20, 20, 0.10),
+  border-radius: 10px 10px 10px 0;
+  box-shadow: 0 2px 12px rgba(20, 20, 20, 0.08),
     4px 4px 0 var(--text-primary);
 }
 
-/* ---- Composer: black frame + signature rose stamp ---- */
+/* ---- Composer: boxie — tight 10px, blocky rose stamp ---- */
 .composer-form {
   border: 2.5px solid var(--text-primary);
-  border-radius: 18px;
-  box-shadow: 0 4px 24px rgba(20, 20, 20, 0.08),
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(20, 20, 20, 0.06),
     inset 0 1px 0 rgba(255, 255, 255, 0.6),
     5px 5px 0 var(--accent);
 }
 
 .composer-container.is-centered .composer-form.is-retracted {
   border: 2.5px solid var(--text-primary);
-  box-shadow: 0 8px 24px rgba(20, 20, 20, 0.08),
+  box-shadow: 0 8px 16px rgba(20, 20, 20, 0.06),
     5px 5px 0 var(--accent);
 }
 
 .composer-container.is-centered .composer-form.is-retracted:hover {
   transform: translate(1px, 1px);
   box-shadow: 0 10px 28px rgba(20, 20, 20, 0.10),
-    4px 4px 0 var(--accent);
+    5px 5px 0 var(--accent);
 }
 
 .composer-container.is-centered .composer-form.is-expanded,
 .composer-container.is-centered .composer-form:focus-within {
-  border: 2.5px solid var(--accent);
+  border: 3px solid var(--accent);
   box-shadow: 0 12px 40px var(--accent-glow),
     0 0 0 2px var(--accent-dim),
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
@@ -1505,23 +1555,23 @@ svg { flex-shrink: 0; }
 }
 
 .composer-container.is-docked .composer-form:focus-within {
-  border: 2.5px solid var(--accent);
+  border: 3px solid var(--accent);
   box-shadow: 0 4px 32px rgba(0, 0, 0, 0.4),
     0 0 0 3px var(--accent-dim),
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
     5px 5px 0 var(--accent);
 }
 
-/* ---- Send button: rose fill, black frame + black stamp ---- */
+/* ---- Send button: boxie 6px, rose fill, black stamp ---- */
 .send-button {
-  border-radius: 12px;
+  border-radius: 6px;
   border: 2px solid transparent;
 }
 
 .send-button:not(:disabled) {
   border-color: var(--text-primary);
   box-shadow: 0 2px 14px rgba(244, 63, 94, 0.35),
-    3px 3px 0 var(--text-primary);
+    4px 4px 0 var(--text-primary);
 }
 
 .send-button:not(:disabled):hover {
@@ -1531,48 +1581,68 @@ svg { flex-shrink: 0; }
 }
 
 .send-button:not(:disabled):active {
-  transform: translate(3px, 3px) scale(0.94);
+  transform: translate(4px, 4px) scale(0.94);
   box-shadow: 0 2px 14px rgba(244, 63, 94, 0.35),
     0 0 0 var(--text-primary);
 }
 
-/* ---- Welcome card star emblem: stamp it, keep welcome-in ---- */
+/* ---- Welcome card star emblem: boxie 6px ---- */
 .chat-welcome-star {
   border: 2px solid var(--text-primary);
-  border-radius: 12px;
+  border-radius: 6px;
   padding: 6px;
   box-shadow: 3px 3px 0 var(--text-primary);
   background: var(--accent-dim);
 }
 
-/* ---- Mobile: shrink hard offsets so nothing overflows ---- */
+/* ---- Mobile: boxie tight, shrink stamps so nothing overflows ---- */
 @media (max-width: 640px) {
   .topbar-mood-tag,
   .reset-chat-btn,
   .welcome-skip,
   .brand-user-tag {
+    border-radius: 6px;
     box-shadow: 2px 2px 0 var(--text-primary);
   }
 
   .bubble-assistant,
   .typing-bubble {
-    box-shadow: 0 2px 14px rgba(20, 20, 20, 0.08),
+    border-radius: 8px 8px 8px 0;
+    box-shadow: 0 2px 10px rgba(20, 20, 20, 0.06),
       2px 2px 0 var(--text-primary);
   }
 
   .bubble-user {
-    box-shadow: 0 2px 14px rgba(244, 63, 94, 0.25),
+    border-radius: 8px 8px 0 8px;
+    box-shadow: 0 2px 10px rgba(244, 63, 94, 0.20),
       2px 2px 0 var(--text-primary);
   }
 
   .composer-form {
-    border-radius: 16px;
-    box-shadow: 0 4px 24px rgba(20, 20, 20, 0.08),
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(20, 20, 20, 0.06),
       inset 0 1px 0 rgba(255, 255, 255, 0.6),
       3px 3px 0 var(--accent);
   }
+
+  .send-button {
+    border-radius: 6px;
+  }
+
+  .mira-avatar-header,
+  .bubble-avatar,
+  .centered-avatar-wrap {
+    border-radius: 6px;
+  }
 }
 
+
+/* ---- Boxie nameprompt: chunkier ---- */
+.nameprompt-card {
+  border: 3px solid var(--text-primary) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4), 6px 6px 0 var(--accent) !important;
+}
 /* ============================================================
    NAME PROMPT (startup popup)
    ============================================================ */
@@ -1602,7 +1672,7 @@ svg { flex-shrink: 0; }
   overscroll-behavior: contain;
   background: var(--bg-elevated);
   border: 2.5px solid var(--text-primary);
-  border-radius: 18px;
+  border-radius: 12px;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4), 5px 5px 0 var(--accent);
   padding: 28px 26px 20px;
   display: flex;
@@ -1615,7 +1685,7 @@ svg { flex-shrink: 0; }
 .nameprompt-avatar {
   width: 52px;
   height: 52px;
-  border-radius: 16px;
+  border-radius: 8px;
   border: 2px solid var(--text-primary);
   box-shadow: 3px 3px 0 var(--accent);
   background: linear-gradient(135deg, #ffffff 0%, #ffe4ec 100%);
@@ -1662,7 +1732,7 @@ svg { flex-shrink: 0; }
   color: var(--text-primary);
   background: var(--bg-surface);
   border: 2px solid var(--text-primary);
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 3px 3px 0 var(--accent);
   outline: none;
 }
@@ -1686,7 +1756,7 @@ svg { flex-shrink: 0; }
 .nameprompt-submit {
   height: 44px;
   min-height: 44px;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 2px solid var(--text-primary);
   background: var(--accent);
   color: #ffffff;

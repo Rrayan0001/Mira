@@ -109,9 +109,11 @@ export default function ChatUI() {
     window.setTimeout(() => setFigWiggle(false), 520);
   }, []);
 
-  // Auto-scroll on new turns or typing state changes
+  // Auto-scroll on new turns or typing state changes.
+  // Use instant during streaming to avoid jank/distortion on mobile; smooth otherwise.
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    const behavior: ScrollBehavior = streaming ? "auto" : "smooth";
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior });
   }, [turns, typing, streaming]);
 
   // Show gentle hint if generation takes longer than 4.5 seconds
@@ -363,28 +365,71 @@ export default function ChatUI() {
   const [isFocused, setIsFocused] = useState(false);
   const hasStarted = turns.some((t) => t.role === "user");
 
-  // Drive the :has() fallback .is-keyboard-open on mobile so the hero
-  // compacts even in browsers without :has() support, and keep the
-  // focused input visible above the IME.
+  // Keep composer visible above the IME on mobile.
+  // Handles BOTH centered hero (pre-chat) and docked footer (active chat).
+  // Uses visualViewport to set --kb-offset / --app-height so flex layout
+  // stays above the keypad, and falls back to :has() for non-supporting browsers.
   useEffect(() => {
-    if (hasStarted) return;
     const vv = window.visualViewport;
-    const hero = document.querySelector<HTMLElement>(".chat-centered-hero");
-    if (!hero || !vv) return;
-    const threshold = window.innerHeight * 0.85;
-    const onResize = () => {
+    if (!vv) return;
+
+    const updateViewport = () => {
+      const isMobile = window.innerWidth <= 640;
+      const threshold = window.innerHeight * 0.85;
       const kbOpen = vv.height < threshold;
-      hero.classList.toggle("is-keyboard-open", kbOpen);
-      if (kbOpen) {
+      const hero = document.querySelector<HTMLElement>(".chat-centered-hero");
+
+      if (isMobile) {
+        const kbOffset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+        // Translate composer up when visual viewport is shrunk but layout viewport didn't resize
+        // (iOS resizes-visual case). When layout already resized, kbOffset is 0 and flex does the job.
+        document.documentElement.style.setProperty("--kb-offset", `${kbOffset}px`);
+        // Pin app height to visual viewport so composer isn't pushed below the keypad
+        // Only when keyboard is likely open; otherwise let dvh handle it.
+        if (kbOpen) {
+          document.documentElement.style.setProperty("--app-height", `${vv.height}px`);
+        } else {
+          document.documentElement.style.removeProperty("--app-height");
+        }
+      } else {
+        document.documentElement.style.setProperty("--kb-offset", "0px");
+        document.documentElement.style.removeProperty("--app-height");
+      }
+
+      if (hero) {
+        hero.classList.toggle("is-keyboard-open", kbOpen);
+        if (kbOpen && hasStarted === false) {
+          window.setTimeout(() => {
+            inputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+          }, 80);
+        }
+      }
+
+      // During active chat keep the feed pinned to bottom so composer never vanishes
+      if (hasStarted && (kbOpen || isGenerating)) {
         window.setTimeout(() => {
-          inputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-        }, 80);
+          listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "auto" });
+        }, 50);
       }
     };
-    vv.addEventListener("resize", onResize);
-    onResize();
-    return () => vv.removeEventListener("resize", onResize);
-  }, [hasStarted]);
+
+    vv.addEventListener("resize", updateViewport);
+    vv.addEventListener("scroll", updateViewport);
+    window.addEventListener("resize", updateViewport);
+    window.addEventListener("orientationchange", updateViewport);
+    updateViewport();
+
+    return () => {
+      vv.removeEventListener("resize", updateViewport);
+      vv.removeEventListener("scroll", updateViewport);
+      window.removeEventListener("resize", updateViewport);
+      window.removeEventListener("orientationchange", updateViewport);
+      document.documentElement.style.removeProperty("--kb-offset");
+      document.documentElement.style.removeProperty("--app-height");
+      const hero = document.querySelector<HTMLElement>(".chat-centered-hero");
+      if (hero) hero.classList.remove("is-keyboard-open");
+    };
+  }, [hasStarted, isGenerating]);
 
   const resetChat = () => {
     const nextSessionId =
