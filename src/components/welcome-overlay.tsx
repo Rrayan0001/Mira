@@ -2,9 +2,33 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useScrollLock } from "./use-scroll-lock";
 
+import AnimatedDoodle from "./animated-doodle";
+
 const SEEN_KEY = "mira-welcome-seen";
 const SHOW_MS = 1900;
 const EXIT_MS = 550;
+
+export const WELCOME_DONE_EVENT = "mira:welcome-done";
+
+let welcomeDoneFlag = false;
+
+/** True once the welcome veil has finished (or was skipped) in this page load. */
+export function isWelcomeDone(): boolean {
+  return welcomeDoneFlag;
+}
+
+function signalWelcomeDone(): void {
+  if (welcomeDoneFlag) return;
+  welcomeDoneFlag = true;
+  window.dispatchEvent(new Event(WELCOME_DONE_EVENT));
+}
+
+/** React subscription for the welcome-done event (see `useSyncExternalStore`). */
+export function subscribeWelcomeDone(cb: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(WELCOME_DONE_EVENT, cb);
+  return () => window.removeEventListener(WELCOME_DONE_EVENT, cb);
+}
 
 export default function WelcomeOverlay() {
   const [visible, setVisible] = useState(false);
@@ -26,21 +50,28 @@ export default function WelcomeOverlay() {
         } catch {}
       }
       setVisible(false);
+      signalWelcomeDone();
     }, EXIT_MS);
   }, []);
 
   useEffect(() => {
     const stay = new URLSearchParams(window.location.search).get("welcome") === "stay";
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!stay && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      signalWelcomeDone();
+      return;
+    }
     if (!stay) {
       try {
-        if (sessionStorage.getItem(SEEN_KEY) === "1") return;
+        if (sessionStorage.getItem(SEEN_KEY) === "1") {
+          signalWelcomeDone();
+          return;
+        }
       } catch {}
     }
-    const frame = requestAnimationFrame(() => {
+    const showTimer = setTimeout(() => {
       setVisible(true);
       skipRef.current?.focus({ preventScroll: true });
-    });
+    }, 0);
     const background = Array.from(document.querySelectorAll<HTMLElement>("main, #chat-main, .chat-app"));
     const previous = background.map((el) => el.inert);
     background.forEach((el) => (el.inert = true));
@@ -51,12 +82,14 @@ export default function WelcomeOverlay() {
         dismiss();
       }
     };
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey);
     return () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(auto);
-      background.forEach((el, i) => (el.inert = previous[i]));
-      document.removeEventListener("keydown", onKey);
+      clearTimeout(showTimer);
+      if (auto) window.clearTimeout(auto);
+      window.removeEventListener("keydown", onKey);
+      background.forEach((el, i) => {
+        el.inert = previous[i] ?? false;
+      });
     };
   }, [dismiss]);
 
@@ -66,13 +99,7 @@ export default function WelcomeOverlay() {
     <div className={`welcome ${leaving ? "welcome-leaving" : ""}`} role="dialog" aria-modal="true" aria-label="Welcome to Mira">
       <div className="welcome-inner">
         <div className="welcome-doodle-wrap" aria-hidden="true">
-          <img
-            src="/mira-doodle-transparent.png"
-            alt=""
-            className="welcome-doodle-img"
-            width={160}
-            height={175}
-          />
+          <AnimatedDoodle size={150} />
         </div>
         <p className="welcome-word">mira</p>
         <p className="welcome-sub">TUNING INTO YOU</p>

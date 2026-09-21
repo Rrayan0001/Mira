@@ -1,6 +1,6 @@
 import { getAzure, getChatDeployment } from "@/lib/azure";
 import { mockClassify } from "@/lib/mock-mood";
-import { isMood, type ChatMessage, type MoodResult } from "@/lib/moods";
+import { normalizeMood, type ChatMessage, type MoodResult } from "@/lib/moods";
 import { MOOD_CLASSIFIER_SYSTEM } from "@/lib/prompts";
 import { retrieve } from "@/lib/rag";
 
@@ -29,7 +29,8 @@ function parseMoodJson(raw: string): MoodResult {
       confidence?: unknown;
       cues?: unknown;
     };
-    if (!isMood(parsed.mood)) return FALLBACK;
+    const mood = normalizeMood(parsed.mood);
+    if (!mood) return FALLBACK;
     const confidence =
       typeof parsed.confidence === "number" &&
       Number.isFinite(parsed.confidence)
@@ -38,7 +39,7 @@ function parseMoodJson(raw: string): MoodResult {
     const cues = Array.isArray(parsed.cues)
       ? parsed.cues.filter((c): c is string => typeof c === "string").slice(0, 3)
       : [];
-    return { mood: parsed.mood, confidence, cues };
+    return { mood, confidence, cues };
   } catch {
     return FALLBACK;
   }
@@ -86,7 +87,20 @@ export async function classifyMood(
     );
 
     const raw = (res as { choices: { message?: { content?: string } }[] }).choices[0]?.message?.content ?? "";
-    return parseMoodJson(raw);
+    const detected = parseMoodJson(raw);
+
+    // Safety net: the LLM sometimes returns "neutral" for messages that clearly
+    // carry disappointment/absence (e.g. "my friend didnt come today").
+    // Prefer a confident non-neutral local heuristic over a neutral LLM verdict.
+    try {
+      const fallback = mockClassify(message);
+      if (detected.mood === "neutral" && fallback.mood !== "neutral" && fallback.confidence >= 0.7) {
+        return fallback;
+      }
+    } catch {
+      // ignore heuristic errors, keep LLM verdict
+    }
+    return detected;
   } catch (err) {
     const msg = String((err as Error)?.message ?? "");
     if (

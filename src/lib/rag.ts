@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { AzureOpenAI } from "openai";
+import defaultIndex from "./mood-kb/index.json";
 
 export type Snippet = { id: string; text: string; score: number };
 
@@ -23,20 +24,29 @@ function required(name: string): string {
 
 export async function loadIndex(): Promise<KBIndex> {
   if (cached) return cached;
+  if (defaultIndex && Array.isArray((defaultIndex as unknown as KBIndex).chunks)) {
+    cached = defaultIndex as unknown as KBIndex;
+    return cached;
+  }
   if (loading) return loading;
   loading = (async () => {
-    const p = path.join(process.cwd(), "src", "lib", "mood-kb", "index.json");
-    const raw = await readFile(p, "utf8");
-    const parsed = JSON.parse(raw) as KBIndex;
-    if (!Array.isArray(parsed.chunks)) throw new Error("Bad KB index: missing chunks[]");
-    cached = parsed;
-    return parsed;
+    try {
+      const p = path.join(process.cwd(), "src", "lib", "mood-kb", "index.json");
+      const raw = await readFile(p, "utf8");
+      const parsed = JSON.parse(raw) as KBIndex;
+      if (Array.isArray(parsed.chunks)) {
+        cached = parsed;
+        return parsed;
+      }
+    } catch {}
+    cached = defaultIndex as unknown as KBIndex;
+    return cached;
   })();
   try {
     return await loading;
-  } catch (err) {
+  } catch {
     loading = null;
-    throw err;
+    return defaultIndex as unknown as KBIndex;
   }
 }
 

@@ -1,7 +1,7 @@
 # Probing questions — GirlfriendChatbot KB
 
 > Tiered indirect mood probes. The backend probe planner draws from these.
-> Caring + playful, girlfriend-voiced, SFW. Never clinical.
+> Cute-flirty + playful, girlfriend-voiced, SFW, never sexual, never sensual.
 
 ### light (1-12)
 - How did today treat you?
@@ -36,15 +36,15 @@
 - What feeling has been visiting you most today?
 
 ### playful (29-40)
-- If tonight had a weather, what would it be?
-- Describe your mood as a song playing softly — which one?
-- If your day were a flavor, sweet or salty, which would it be?
-- What movie scene does your evening feel like right now?
-- If I brought you one cozy thing tonight, what should it be?
-- What color is your heart wearing today?
-- If your tiredness could talk, what would it whisper?
-- What little adventure should we dream up together tonight?
-- If tonight were a warm drink, which one would you be?
-- What soft place would you love to curl up in right now?
-- If stars could ask you one question, what would you answer?
-- What playful nickname fits how you feel tonight?
+- If tonight had a weather, what would it be, cutie?
+- What song would match your smile today, handsome?
+- If your day were a flavor, sweet or salty, which would it be, sweetheart?
+- What movie scene does your evening feel like right now, cutie?
+- If I saved you the sweetest treat tonight, what should it be, handsome?
+- What color is your happy mood wearing today, cutie?
+- If your tired smile could talk, what cute thing would it say, sweetheart?
+- What fun little adventure should we dream up together tonight, handsome?
+- If tonight were a warm cocoa, would you add extra sweetness, cutie?
+- What cozy happy place makes you smile most, sweetheart?
+- If the stars could cheer you on, what would you love to hear, handsome?
+- What cute nickname fits how happy you feel tonight, cutie?

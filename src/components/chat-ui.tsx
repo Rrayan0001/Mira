@@ -1,13 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { RotateCcw, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { RotateCcw } from "lucide-react";
 import { MOOD_META, type ChatMessage, type Mood, type MoodResult, type Stage } from "@/lib/moods";
 import { MOCK_REPLIES, mockClassify } from "@/lib/mock-mood";
+import { extractName } from "@/lib/session";
+import NamePrompt from "./name-prompt";
+import { isWelcomeDone, subscribeWelcomeDone } from "./welcome-overlay";
 
 type Turn = ChatMessage & { id: string; time: string };
 
-const INITIAL_GREETING = "Hey, it's Mira — I'm really glad you're here. How did today treat you?";
+const INITIAL_GREETING = "Hey, it's Mira — I'm really glad you're here. What's your name?";
 
 function nowTime(): string {
   if (typeof window === "undefined") return "Just now";
@@ -23,9 +26,67 @@ export default function ChatUI() {
     typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : uid()
   );
 
+  const [userName, setUserName] = useState<string>("");
+
   const [turns, setTurns] = useState<Turn[]>(() => [
     { id: "init-0", role: "assistant", content: INITIAL_GREETING, time: "Just now" },
   ]);
+
+  // Startup name popup — shown every time the website is opened (and on New chat),
+  // but only after the welcome animation has finished.
+  const [showNamePrompt, setShowNamePrompt] = useState(true);
+  const welcomeDone = useSyncExternalStore(subscribeWelcomeDone, isWelcomeDone, () => false);
+
+  const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const assembledRef = useRef("");
+
+  // Keep the composer focused so the user can keep typing without re-clicking.
+  const focusComposer = useCallback(() => {
+    requestAnimationFrame(() => {
+      inputRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  // Seed the per-chat server cache with the popup name so all later
+  // /api/chat turns in this chat already know who the user is.
+  const seedNameCache = useCallback(async (sid: string, name: string) => {
+    try {
+      await fetch(`/api/session/${encodeURIComponent(sid)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userName: name }),
+      });
+    } catch (err) {
+      console.error("Failed to seed session name cache:", err);
+    }
+  }, []);
+
+  const handleNameSubmit = useCallback(
+    (name: string) => {
+      const clean = name.trim().replace(/\s+/g, " ").slice(0, 30);
+      if (!clean) return;
+      setUserName(clean);
+      setShowNamePrompt(false);
+      // Personalize the opening line immediately (only before chat starts).
+      setTurns((prev) => {
+        if (prev.some((t) => t.role === "user")) return prev;
+        return prev.map((t, i) =>
+          i === 0
+            ? { ...t, content: `It's so wonderful to meet you, ${clean}! How did today treat you?` }
+            : t,
+        );
+      });
+      void seedNameCache(sessionId, clean);
+      focusComposer();
+    },
+    [focusComposer, seedNameCache, sessionId],
+  );
+
+  const handleNameSkip = useCallback(() => {
+    setShowNamePrompt(false);
+    focusComposer();
+  }, [focusComposer]);
 
   const [input, setInput] = useState("");
   const [mood, setMood] = useState<MoodResult>({
@@ -35,18 +96,23 @@ export default function ChatUI() {
     stage: "sensing",
   });
   const [typing, setTyping] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [slowTypingHint, setSlowTypingHint] = useState(false);
 
-  const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const assembledRef = useRef("");
-
   const meta = MOOD_META[mood.mood] || MOOD_META.neutral;
+  // Combined generation flag (typing = awaiting stream start, streaming = tokens arriving)
+  const isGenerating = typing || streaming;
+
+  const [figWiggle, setFigWiggle] = useState(false);
+  const triggerFigWiggle = useCallback(() => {
+    setFigWiggle(true);
+    window.setTimeout(() => setFigWiggle(false), 520);
+  }, []);
 
   // Auto-scroll on new turns or typing state changes
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [turns, typing]);
+  }, [turns, typing, streaming]);
 
   // Show gentle hint if generation takes longer than 4.5 seconds
   useEffect(() => {
@@ -101,7 +167,7 @@ export default function ChatUI() {
   const sendMessage = useCallback(
     async (raw: string) => {
       const text = raw.trim();
-      if (!text || typing) return;
+      if (!text || typing || streaming) return;
 
       const userTurn: Turn = {
         id: `turn-${Date.now()}-${uid()}`,
@@ -121,6 +187,8 @@ export default function ChatUI() {
         inputRef.current.style.height = "auto";
       }
       setComposerHeight(52);
+      // Retain focus so the next message can be typed immediately.
+      focusComposer();
 
       setTyping(true);
 
@@ -133,6 +201,16 @@ export default function ChatUI() {
         cues: local.cues,
       }));
 
+      // Optimistic user name detection if not established yet
+      let activeUserName = userName;
+      if (!activeUserName) {
+        const optimistic = extractName(text);
+        if (optimistic) {
+          activeUserName = optimistic;
+          setUserName(optimistic);
+        }
+      }
+
       // Call real backend route with SSE streaming
       try {
         const res = await fetch("/api/chat", {
@@ -141,6 +219,7 @@ export default function ChatUI() {
           body: JSON.stringify({
             sessionId,
             message: text,
+            userName: activeUserName || undefined,
             history: currentHistory.slice(0, -1),
           }),
         });
@@ -159,6 +238,7 @@ export default function ChatUI() {
 
           const assistantTurnId = `turn-${Date.now()}-${uid()}`;
           setTyping(false);
+          setStreaming(true);
           setTurns((prev) => [
             ...prev,
             { id: assistantTurnId, role: "assistant", content: "", time: nowTime() },
@@ -186,6 +266,7 @@ export default function ChatUI() {
                   confidence?: number;
                   cues?: string[];
                   stage?: Stage;
+                  userName?: string;
                   error?: string;
                 };
 
@@ -197,6 +278,10 @@ export default function ChatUI() {
                     cues: obj.cues ?? [],
                     stage: obj.stage,
                   });
+                }
+
+                if (obj.userName && typeof obj.userName === "string") {
+                  setUserName(obj.userName);
                 }
 
                 if (obj.token) {
@@ -222,6 +307,8 @@ export default function ChatUI() {
             const pool = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
             appendAssistant(pool[0]!);
           }
+          setStreaming(false);
+          focusComposer();
           return;
         }
 
@@ -232,9 +319,10 @@ export default function ChatUI() {
           confidence?: number;
           cues?: string[];
           stage?: Stage;
+          userName?: string;
         };
-
         setTyping(false);
+        setStreaming(false);
         if (data.mood) {
           setMood({
             mood: data.mood,
@@ -243,15 +331,21 @@ export default function ChatUI() {
             stage: data.stage,
           });
         }
+        if (data.userName && typeof data.userName === "string") {
+          setUserName(data.userName);
+        }
         appendAssistant(data.reply);
+        focusComposer();
       } catch (err) {
         console.error("Chat request failed:", err);
         setTyping(false);
+        setStreaming(false);
         const pool = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
         appendAssistant(pool[0]!);
+        focusComposer();
       }
     },
-    [appendAssistant, sessionId, turns, typing]
+    [appendAssistant, focusComposer, sessionId, streaming, turns, typing, userName]
   );
 
   const onSubmit = (e: React.FormEvent) => {
@@ -266,22 +360,49 @@ export default function ChatUI() {
     }
   };
 
+  const [isFocused, setIsFocused] = useState(false);
+  const hasStarted = turns.some((t) => t.role === "user");
+
+  // Drive the :has() fallback .is-keyboard-open on mobile so the hero
+  // compacts even in browsers without :has() support, and keep the
+  // focused input visible above the IME.
+  useEffect(() => {
+    if (hasStarted) return;
+    const vv = window.visualViewport;
+    const hero = document.querySelector<HTMLElement>(".chat-centered-hero");
+    if (!hero || !vv) return;
+    const threshold = window.innerHeight * 0.85;
+    const onResize = () => {
+      const kbOpen = vv.height < threshold;
+      hero.classList.toggle("is-keyboard-open", kbOpen);
+      if (kbOpen) {
+        window.setTimeout(() => {
+          inputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, 80);
+      }
+    };
+    vv.addEventListener("resize", onResize);
+    onResize();
+    return () => vv.removeEventListener("resize", onResize);
+  }, [hasStarted]);
+
   const resetChat = () => {
     const nextSessionId =
       typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : uid();
     setSessionId(nextSessionId);
+    setUserName("");
     setTurns([{ id: `init-${Date.now()}`, role: "assistant", content: INITIAL_GREETING, time: nowTime() }]);
     setMood({ mood: "neutral", confidence: 0.52, cues: ["getting to know you"], stage: "sensing" });
     setTyping(false);
+    setStreaming(false);
     setInput("");
+    // New chat = new cache, so ask for the name again.
+    setShowNamePrompt(true);
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
     }
     setComposerHeight(52);
   };
-
-  const [isFocused, setIsFocused] = useState(false);
-  const hasStarted = turns.some((t) => t.role === "user");
 
   const renderComposer = (isDocked: boolean) => (
     <div className={`composer-container ${isDocked ? "is-docked" : "is-centered"}`}>
@@ -295,13 +416,19 @@ export default function ChatUI() {
         <div ref={topFadeRef} className="composer-fade-top" aria-hidden="true" />
 
         <label className="sr-only" htmlFor="chat-input">
-          Message Mira
+          {!hasStarted ? "Enter your name to start conversation" : "Message Mira"}
         </label>
         <textarea
           id="chat-input"
           ref={inputRef}
           className="composer-input"
-          placeholder="Tell me what’s on your mind… (Shift+Enter for newline)"
+          placeholder={
+            !hasStarted
+              ? "Tell me your name… (e.g. Alex)"
+              : userName
+              ? `Message Mira, ${userName}… (Shift+Enter for newline)`
+              : "Tell me what’s on your mind… (Shift+Enter for newline)"
+          }
           rows={1}
           value={input}
           onChange={handleInputChange}
@@ -317,7 +444,7 @@ export default function ChatUI() {
         <button
           className={`send-button ${input.trim() ? "active" : ""}`}
           type="submit"
-          disabled={!input.trim() || typing}
+          disabled={!input.trim() || isGenerating}
           aria-label="Send message"
         >
           <svg width="15" height="15" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -339,6 +466,7 @@ export default function ChatUI() {
 
   return (
     <div className="chat-app">
+      <NamePrompt open={showNamePrompt && welcomeDone} initialName={userName} onSubmit={handleNameSubmit} onSkip={handleNameSkip} />
       {/* Top App Bar */}
       <header className="chat-topbar">
         <div className="chat-topbar-inner">
@@ -350,9 +478,10 @@ export default function ChatUI() {
             <div className="brand-info">
               <div className="brand-title">
                 <span>mira</span>
+                {userName && <span className="brand-user-tag">· with {userName}</span>}
               </div>
               <span className="brand-tagline">
-                {typing ? "listening & thinking…" : meta.phrase}
+                {isGenerating ? (streaming ? "writing to you, cutie…" : "thinking of you…") : meta.phrase}
               </span>
             </div>
           </div>
@@ -406,11 +535,11 @@ export default function ChatUI() {
               <span className="pulse-indicator" />
             </div>
             <h1 className="centered-hero-title">
-              Tell me everything. <br />
-              <em>I am listening.</em>
+              Hey, it&apos;s Mira. <br />
+              <em>What&apos;s your name?</em>
             </h1>
             <p className="centered-hero-subtitle">
-              Warm, caring, and always tuned into how you feel. Take your time and say whatever is on your mind.
+              I&apos;m really glad you&apos;re here. Tell me what I should call you so we can get to know each other.
             </p>
             <div className="centered-composer-slot">
               {renderComposer(false)}
@@ -477,6 +606,43 @@ export default function ChatUI() {
 
           {/* Docked Composer Bar */}
           <footer className="composer-section">
+            {/* Interactive generating figure — appears just above the textbox while Mira is replying */}
+            {isGenerating && (
+              <button
+                type="button"
+                className={`mira-generating-figure ${figWiggle ? "is-wiggling" : ""}`}
+                onClick={triggerFigWiggle}
+                aria-label="Mira is replying — tap for a little wave"
+                title="Tap for a little wave"
+              >
+                <span className="mira-gen-avatar" aria-hidden="true">
+                  <img src="/mira-avatar.png" alt="" width={36} height={36} className="mira-avatar-img" />
+                  <span
+                    className="mira-gen-pulse"
+                    style={{ background: meta.dot, boxShadow: `0 0 8px ${meta.dot}` }}
+                  />
+                </span>
+                <span className="mira-gen-text">
+                  <span className="mira-gen-title">
+                    {streaming ? "Mira is writing" : "Mira is thinking"}
+                    {userName ? ` for ${userName}` : ""}…
+                  </span>
+                  <span className="mira-gen-sub">
+                    {streaming ? "pouring her heart out, cutie" : "getting something sweet ready"}
+                  </span>
+                </span>
+                <span className="mira-gen-dots" aria-hidden="true">
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                </span>
+                <span className="mira-gen-hearts" aria-hidden="true">
+                  <span>♡</span>
+                  <span>♡</span>
+                  <span>♡</span>
+                </span>
+              </button>
+            )}
             {renderComposer(true)}
           </footer>
         </>

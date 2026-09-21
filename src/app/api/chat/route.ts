@@ -8,9 +8,9 @@ import {
 } from "@/lib/prompts";
 import { retrieve } from "@/lib/rag";
 import { SAFETY_REPLY, isSafetyTriggered } from "@/lib/safety";
-import { computeStage, getSession, saveSession } from "@/lib/session";
+import { computeStage, extractName, getSession, saveSession, NON_NAME_WORDS } from "@/lib/session";
 import { MOCK_REPLIES, mockClassify } from "@/lib/mock-mood";
-import { isMood, isStage, type ChatMessage, type Mood, type Stage } from "@/lib/moods";
+import { isStage, normalizeMood, type ChatMessage, type Mood, type Stage } from "@/lib/moods";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +18,7 @@ export const dynamic = "force-dynamic";
 const Body = z.object({
   sessionId: z.string().min(1).max(64),
   message: z.string().min(1).max(2000),
+  userName: z.string().max(100).optional(),
   history: z
     .array(
       z.object({
@@ -47,11 +48,12 @@ async function refreshSummary(
   history: ChatMessage[],
   message: string,
   reply: string,
+  userName?: string,
 ): Promise<void> {
   try {
     const transcript = [
       ...history.slice(-10),
-      { role: "user", content: message } as ChatMessage,
+      { role: "user", content: `${userName ? `(${userName}) ` : ""}${message}` } as ChatMessage,
       { role: "assistant", content: reply } as ChatMessage,
     ]
       .map((h) => `${h.role}: ${h.content}`)
@@ -72,7 +74,7 @@ async function refreshSummary(
       .slice(0, 300);
     const prev = getSession(sessionId);
     if (prev) {
-      saveSession(sessionId, { mood: prev.mood, summary });
+      saveSession(sessionId, { mood: prev.mood, summary, userName: prev.userName });
     }
   } catch (err) {
     console.error("summary refresh failed:", err);
@@ -96,13 +98,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const { sessionId, message, history } = parsed.data;
+  const { sessionId, message, history, userName: reqUserName } = parsed.data;
 
   // 1. Safety gate FIRST — before any Azure call. Non-stream JSON reply.
   if (isSafetyTriggered(message)) {
     try {
       const prev = getSession(sessionId);
       saveSession(sessionId, {
+        userName: prev?.userName || reqUserName || extractName(message),
         mood: "sad",
         confidence: 1,
         stage: "comfort_action",
@@ -124,7 +127,16 @@ export async function POST(req: Request) {
 
   // 3. Conversation lifecycle & stage calculation.
   const prevSession = getSession(sessionId);
-  const turnCount = (prevSession?.turns ?? 0) + 1;
+  let currentUserName = prevSession?.userName || reqUserName?.trim() || "";
+  if (!currentUserName) {
+    const extracted = extractName(message);
+    if (extracted) {
+      currentUserName = extracted;
+    }
+  }
+
+  const clientTurns = Math.floor(history.length / 2) + 1;
+  const turnCount = Math.max((prevSession?.turns ?? 0) + 1, clientTurns);
   const currentStage: Stage = computeStage(turnCount);
   const currentMood: Mood = prevSession?.mood ?? "neutral";
 
@@ -134,6 +146,7 @@ export async function POST(req: Request) {
     turnCount,
     snippets: knowledge,
     summary: prevSession?.summary || "",
+    userName: currentUserName,
   });
 
   const encoder = new TextEncoder();
@@ -142,6 +155,26 @@ export async function POST(req: Request) {
   let detectedConfidence = 0.85;
   let detectedCues: string[] = [];
   let detectedStage: Stage = currentStage;
+
+  // Local heuristic baseline for this turn. Used as a safety net if the model
+  // returns "neutral" despite clear emotional content, and to sanitize output.
+  let heuristicMood: Mood = "neutral";
+  let heuristicConfidence = 0;
+  let heuristicCues: string[] = [];
+  try {
+    const h = mockClassify(message);
+    heuristicMood = h.mood;
+    heuristicConfidence = h.confidence;
+    heuristicCues = h.cues;
+  } catch {
+    // ignore, keep neutral baseline
+  }
+
+  function sanitizeToken(text: string): string {
+    // Strip any leaked META header fragments so they never reach the UI
+    // (prevents garbage like raw "<!-- META ..." or truncated name bits).
+    return text.replace(/<!--[\s\S]*?-->/g, "").replace(/<!--[\s\S]*$/g, "");
+  }
 
   let isClosed = false;
   const stream = new ReadableStream<Uint8Array>({
@@ -200,13 +233,27 @@ export async function POST(req: Request) {
                     confidence?: unknown;
                     cues?: unknown;
                     stage?: unknown;
+                    userName?: unknown;
                   };
-                  if (isMood(metaObj.mood)) detectedMood = metaObj.mood;
+                  const normalized = normalizeMood(metaObj.mood);
+                  if (normalized) detectedMood = normalized;
                   if (typeof metaObj.confidence === "number")
                     detectedConfidence = Math.min(1, Math.max(0, metaObj.confidence));
                   if (Array.isArray(metaObj.cues))
                     detectedCues = metaObj.cues.filter((c): c is string => typeof c === "string");
                   if (isStage(metaObj.stage)) detectedStage = metaObj.stage;
+                  if (typeof metaObj.userName === "string" && metaObj.userName.trim()) {
+                    const candidate = metaObj.userName.trim();
+                    const parts = candidate.split(/\s+/);
+                    if (
+                      candidate.toLowerCase() !== "null" &&
+                      candidate.length >= 2 &&
+                      candidate.length <= 30 &&
+                      !parts.some((w) => NON_NAME_WORDS.has(w.toLowerCase()))
+                    ) {
+                      currentUserName = candidate;
+                    }
+                  }
 
                   // Emit initial metadata frame as soon as parsed
                   send({
@@ -214,6 +261,7 @@ export async function POST(req: Request) {
                     confidence: detectedConfidence,
                     cues: detectedCues,
                     stage: detectedStage,
+                    userName: currentUserName || undefined,
                   });
                 } catch (e) {
                   console.error("meta parse error:", e);
@@ -221,8 +269,11 @@ export async function POST(req: Request) {
               }
 
               if (remainder) {
-                fullReply += remainder;
-                send({ token: remainder });
+                const clean = sanitizeToken(remainder);
+                if (clean) {
+                  fullReply += clean;
+                  send({ token: clean });
+                }
               }
             } else if (metaBuffer.length > 200 && !metaBuffer.includes("<!--")) {
               // No meta tag output by model; treat entire buffer as text
@@ -236,20 +287,36 @@ export async function POST(req: Request) {
                 confidence: detectedConfidence,
                 cues: detectedCues,
                 stage: detectedStage,
+                userName: currentUserName || undefined,
               });
               fullReply += metaBuffer;
-              send({ token: metaBuffer });
+              const cleanBuf = sanitizeToken(metaBuffer);
+              if (cleanBuf) send({ token: cleanBuf });
             }
           } else {
-            fullReply += delta;
-            send({ token: delta });
+            const clean = sanitizeToken(delta);
+            if (clean) {
+              fullReply += clean;
+              send({ token: clean });
+            }
           }
         }
 
         // If buffer was never completed
         if (inMeta && metaBuffer) {
-          fullReply += metaBuffer;
-          send({ token: metaBuffer });
+          const cleanTail = sanitizeToken(metaBuffer);
+          if (cleanTail) {
+            fullReply += cleanTail;
+            send({ token: cleanTail });
+          }
+        }
+
+        // Safety net: never leave the badge stuck on NEUTRAL when the local
+        // heuristic confidently sees disappointment/absence/loneliness.
+        if (detectedMood === "neutral" && heuristicMood !== "neutral" && heuristicConfidence >= 0.7) {
+          detectedMood = heuristicMood;
+          detectedConfidence = heuristicConfidence;
+          detectedCues = heuristicCues;
         }
 
         // Emit final completion frame
@@ -259,6 +326,7 @@ export async function POST(req: Request) {
           confidence: detectedConfidence,
           cues: detectedCues,
           stage: detectedStage,
+          userName: currentUserName || undefined,
         });
       } catch (err) {
         if (!isClosed) {
@@ -269,7 +337,26 @@ export async function POST(req: Request) {
           detectedCues = fallback.cues;
 
           const pool = MOCK_REPLIES[detectedMood] ?? MOCK_REPLIES.neutral;
-          const mockReply = pool[Math.floor(Math.random() * pool.length)]!;
+          const recentAssistantMsgs = new Set(
+            history
+              .filter((h) => h.role === "assistant")
+              .slice(-6)
+              .map((h) => h.content.trim().toLowerCase()),
+          );
+          const unrepeatedPool = pool.filter(
+            (r) => !recentAssistantMsgs.has(r.trim().toLowerCase()),
+          );
+          const candidatePool = unrepeatedPool.length > 0 ? unrepeatedPool : pool;
+          const isIntro = Boolean(currentUserName && (!prevSession?.userName && turnCount === 1));
+          let mockReply = "";
+          if (isIntro) {
+            mockReply = `It's so wonderful to meet you, ${currentUserName}! How did today treat you?`;
+          } else {
+            mockReply = candidatePool[Math.floor(Math.random() * candidatePool.length)]!;
+            if (currentUserName && mockReply.includes("love")) {
+              mockReply = mockReply.replace(/\blove\b/, currentUserName);
+            }
+          }
           fullReply = mockReply;
 
           for (const part of mockReply.split(/(\s+)/)) {
@@ -285,11 +372,13 @@ export async function POST(req: Request) {
             confidence: detectedConfidence,
             cues: detectedCues,
             stage: detectedStage,
+            userName: currentUserName || undefined,
           });
         }
       } finally {
         try {
           saveSession(sessionId, {
+            userName: currentUserName || undefined,
             mood: detectedMood,
             confidence: detectedConfidence,
             cues: detectedCues,
@@ -298,7 +387,7 @@ export async function POST(req: Request) {
           });
 
           if (turnCount % 6 === 0) {
-            await refreshSummary(sessionId, history, message, fullReply);
+            await refreshSummary(sessionId, history, message, fullReply, currentUserName);
           }
         } catch (err) {
           console.error("session save failed:", err);
