@@ -2,7 +2,13 @@
 export const SELF_HARM_PATTERN =
   /kill myself|suicide|self.?harm|end my life|hurt myself/i;
 
+// Phrases that mention the words without self-harm intent (movie titles,
+// song lyrics quoted without "I", past-tense accidents...). Checked first.
+const SAFETY_EXCLUSIONS =
+  /suicide squad|suicideboys|suicide silence/i;
+
 export function isSafetyTriggered(message: string): boolean {
+  if (SAFETY_EXCLUSIONS.test(message)) return false;
   return SELF_HARM_PATTERN.test(message);
 }
 

@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { DEFAULT_VIBE, VIBES, VIBE_META, isVibe, type Vibe } from "@/lib/vibes";
 import { useScrollLock } from "./use-scroll-lock";
 
 type Props = {
   open: boolean;
   initialName?: string;
-  onSubmit: (name: string) => void;
+  initialVibe?: Vibe;
+  onSubmit: (name: string, vibe: Vibe) => void;
   onSkip: () => void;
 };
 
@@ -14,8 +16,9 @@ function cleanName(raw: string): string {
   return raw.trim().replace(/\s+/g, " ").slice(0, 30);
 }
 
-export default function NamePrompt({ open, initialName = "", onSubmit, onSkip }: Props) {
+export default function NamePrompt({ open, initialName = "", initialVibe, onSubmit, onSkip }: Props) {
   const [value, setValue] = useState(initialName);
+  const [vibe, setVibe] = useState<Vibe>(initialVibe && isVibe(initialVibe) ? initialVibe : DEFAULT_VIBE);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -66,7 +69,7 @@ export default function NamePrompt({ open, initialName = "", onSubmit, onSkip }:
       return;
     }
     setError("");
-    onSubmit(name);
+    onSubmit(name, vibe);
   };
 
   const handleKey = (e: React.KeyboardEvent) => {
@@ -123,6 +126,35 @@ export default function NamePrompt({ open, initialName = "", onSubmit, onSkip }:
               {error}
             </p>
           )}
+          <p className="vibe-label" id="vibe-label">
+            How should I talk to you?
+          </p>
+          <div className="vibe-grid" role="radiogroup" aria-labelledby="vibe-label">
+            {VIBES.map((v) => {
+              const meta = VIBE_META[v];
+              const selected = vibe === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  className={`vibe-option${selected ? " is-selected" : ""}`}
+                  onClick={() => setVibe(v)}
+                >
+                  <span
+                    className="vibe-dot"
+                    style={{ backgroundColor: meta.dot }}
+                    aria-hidden="true"
+                  />
+                  <span className="vibe-option-text">
+                    <strong>{meta.label}</strong>
+                    <small>{meta.tagline}</small>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
           <button type="submit" className="nameprompt-submit" disabled={!value.trim()}>
             Start chatting
           </button>

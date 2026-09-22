@@ -1,4 +1,5 @@
 import type { Mood, Stage } from "@/lib/moods";
+import { DEFAULT_VIBE, type Vibe } from "@/lib/vibes";
 
 export type Session = {
   userName?: string;
@@ -8,6 +9,7 @@ export type Session = {
   turns: number;
   stage: Stage;
   cues: string[];
+  vibe: Vibe;
   updatedAt: number;
 };
 
@@ -30,6 +32,14 @@ export const NON_NAME_WORDS = new Set([
   "my", "your", "his", "her", "our", "their", "the", "a", "an",
   "friend", "friends", "today", "yesterday", "tomorrow", "tonight",
   "day", "night", "work", "school", "home", "life",
+  "college", "office", "class", "course", "subject", "project", "deadline",
+  "interview", "shift", "job", "career", "meeting", "party", "movie", "movies",
+  "match", "game", "team", "company", "boss", "dinner", "lunch", "breakfast",
+  "birthday", "holiday", "vacation", "weekend", "trip", "travel",
+  "music", "song", "dance", "gym", "yoga", "hospital", "doctor",
+  "store", "shop", "market", "mall", "park", "beach", "hotel", "restaurant",
+  "cafe", "wedding", "morning", "evening", "afternoon", "family", "fest",
+  "festival", "exam", "exams", "test", "quiz",
   "feel", "feeling", "went", "came", "come", "didnt", "didn't",
   "just", "much", "very", "little", "bit", "somewhat", "really",
   "is", "was", "are", "were", "been", "being", "have", "had", "has",
@@ -72,7 +82,11 @@ export function extractName(text: string): string | undefined {
     const candidate = words.join(" ");
     if (/^[A-Za-z\u00C0-\u024F\u4e00-\u9fa5'-]+(?:\s+[A-Za-z\u00C0-\u024F\u4e00-\u9fa5'-]+)?$/.test(candidate)) {
       const lowerFirst = words[0].toLowerCase();
-      if (!NON_NAME_WORDS.has(lowerFirst) && candidate.length >= 2 && candidate.length <= 30) {
+      // Two all-lowercase words are never a name ("college fest", "my office"
+      // must not become the user's name). Single lowercase words ("rayan")
+      // still pass via the blocklist below.
+      const isTwoLower = words.length === 2 && words[0] === lowerFirst && words[1] === words[1].toLowerCase();
+      if (!isTwoLower && !NON_NAME_WORDS.has(lowerFirst) && candidate.length >= 2 && candidate.length <= 30) {
         return words
           .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
           .join(" ");
@@ -136,6 +150,7 @@ export function saveSession(
     turns,
     stage: patch.stage ?? prev?.stage ?? computeStage(turns),
     cues: patch.cues ?? prev?.cues ?? [],
+    vibe: patch.vibe ?? prev?.vibe ?? DEFAULT_VIBE,
     updatedAt: now,
   };
   store.set(id, next);

@@ -9,7 +9,9 @@ import {
 import { retrieve } from "@/lib/rag";
 import { SAFETY_REPLY, isSafetyTriggered } from "@/lib/safety";
 import { computeStage, extractName, getSession, saveSession, NON_NAME_WORDS } from "@/lib/session";
-import { MOCK_REPLIES, mockClassify } from "@/lib/mock-mood";
+import { mockClassify } from "@/lib/mock-mood";
+import { detectStyle, generateLocalReply } from "@/lib/local-reply";
+import { DEFAULT_VIBE, VIBES } from "@/lib/vibes";
 import { isStage, normalizeMood, type ChatMessage, type Mood, type Stage } from "@/lib/moods";
 
 export const runtime = "nodejs";
@@ -19,6 +21,7 @@ const Body = z.object({
   sessionId: z.string().min(1).max(64),
   message: z.string().min(1).max(2000),
   userName: z.string().max(100).optional(),
+  vibe: z.enum(VIBES).optional(),
   history: z
     .array(
       z.object({
@@ -98,7 +101,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const { sessionId, message, history, userName: reqUserName } = parsed.data;
+  const { sessionId, message, history, userName: reqUserName, vibe: reqVibe } = parsed.data;
 
   // 1. Safety gate FIRST — before any Azure call. Non-stream JSON reply.
   if (isSafetyTriggered(message)) {
@@ -111,6 +114,7 @@ export async function POST(req: Request) {
         stage: "comfort_action",
         cues: ["self-harm disclosure"],
         turns: (prev?.turns ?? 0) + 1,
+        vibe: reqVibe ?? prev?.vibe ?? DEFAULT_VIBE,
       });
     } catch (err) {
       console.error("session save failed:", err);
@@ -127,6 +131,8 @@ export async function POST(req: Request) {
 
   // 3. Conversation lifecycle & stage calculation.
   const prevSession = getSession(sessionId);
+  // Vibe: explicit turn value wins, else sticky session vibe, else default.
+  const currentVibe = reqVibe ?? prevSession?.vibe ?? DEFAULT_VIBE;
   let currentUserName = prevSession?.userName || reqUserName?.trim() || "";
   if (!currentUserName) {
     const extracted = extractName(message);
@@ -140,6 +146,18 @@ export async function POST(req: Request) {
   const currentStage: Stage = computeStage(turnCount);
   const currentMood: Mood = prevSession?.mood ?? "neutral";
 
+  // Anti-repeat + language context for the model (and the offline engine).
+  // Policy: proper English replies always. Hinglish input is understood
+  // (classifier covers it) but answered in English.
+  const style = detectStyle(message);
+  const recentAssistant = history
+    .filter((h) => h.role === "assistant")
+    .slice(-6)
+    .map((h, i) => `${i + 1}. ${h.content.slice(0, 160)}`)
+    .join("\n");
+  const langHint =
+    "Reply in proper natural English, always. If the user writes Hinglish or Hindi, understand it but answer in English. Never use Hindi words, never force another language on the user.";
+
   const systemPrompt = buildUnifiedChatSystem({
     currentMood,
     currentStage,
@@ -147,6 +165,9 @@ export async function POST(req: Request) {
     snippets: knowledge,
     summary: prevSession?.summary || "",
     userName: currentUserName,
+    recentReplies: recentAssistant,
+    langHint,
+    vibe: currentVibe,
   });
 
   const encoder = new TextEncoder();
@@ -196,7 +217,7 @@ export async function POST(req: Request) {
         const responseStream = await withTimeout(
           azure.chat.completions.create({
             model: getChatDeployment(),
-            temperature: 0.75,
+            temperature: 0.85,
             max_tokens: 450,
             stream: true,
             messages: [
@@ -330,31 +351,29 @@ export async function POST(req: Request) {
         });
       } catch (err) {
         if (!isClosed) {
-          console.error("Chat generation failed, falling back to mock:", err);
+          console.error("Chat generation failed, using local engine:", err);
           const fallback = mockClassify(message);
           detectedMood = fallback.mood;
           detectedConfidence = fallback.confidence;
           detectedCues = fallback.cues;
 
-          const pool = MOCK_REPLIES[detectedMood] ?? MOCK_REPLIES.neutral;
-          const recentAssistantMsgs = new Set(
-            history
-              .filter((h) => h.role === "assistant")
-              .slice(-6)
-              .map((h) => h.content.trim().toLowerCase()),
-          );
-          const unrepeatedPool = pool.filter(
-            (r) => !recentAssistantMsgs.has(r.trim().toLowerCase()),
-          );
-          const candidatePool = unrepeatedPool.length > 0 ? unrepeatedPool : pool;
           const isIntro = Boolean(currentUserName && (!prevSession?.userName && turnCount === 1));
           let mockReply = "";
           if (isIntro) {
             mockReply = `It's so wonderful to meet you, ${currentUserName}! How did today treat you?`;
           } else {
-            mockReply = candidatePool[Math.floor(Math.random() * candidatePool.length)]!;
-            if (currentUserName && mockReply.includes("love")) {
-              mockReply = mockReply.replace(/\blove\b/, currentUserName);
+            // Diverse, reflective, language-matched offline reply.
+            try {
+              mockReply = generateLocalReply({
+                mood: detectedMood,
+                message,
+                history,
+                userName: currentUserName || undefined,
+                stage: detectedStage,
+                vibe: currentVibe,
+              });
+            } catch {
+              mockReply = "I'm right here with you. Tell me a little more about what's on your mind?";
             }
           }
           fullReply = mockReply;
@@ -384,6 +403,7 @@ export async function POST(req: Request) {
             cues: detectedCues,
             stage: detectedStage,
             turns: turnCount,
+            vibe: currentVibe,
           });
 
           if (turnCount % 6 === 0) {

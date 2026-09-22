@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { RotateCcw } from "lucide-react";
 import { MOOD_META, type ChatMessage, type Mood, type MoodResult, type Stage } from "@/lib/moods";
+import { DEFAULT_VIBE, VIBES, VIBE_META, isVibe, type Vibe } from "@/lib/vibes";
 import { MOCK_REPLIES, mockClassify } from "@/lib/mock-mood";
+import { detectStyle } from "@/lib/local-reply";
 import { extractName } from "@/lib/session";
 import NamePrompt from "./name-prompt";
 import FaustAvatar from "./faust-avatar";
@@ -71,6 +73,21 @@ export default function ChatUI() {
 
   const [userName, setUserName] = useState<string>("");
 
+  // Reply vibe — picked in the startup popup, shown in the navbar,
+  // changeable at any time. Persisted across visits.
+  const [vibe, setVibe] = useState<Vibe>(() => {
+    if (typeof window === "undefined") return DEFAULT_VIBE;
+    try {
+      const stored = window.localStorage.getItem("mira-vibe");
+      if (isVibe(stored)) return stored;
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_VIBE;
+  });
+  const [vibeOpen, setVibeOpen] = useState(false);
+  const vibeMenuRef = useRef<HTMLDivElement>(null);
+
   const [turns, setTurns] = useState<Turn[]>(() => [
     { id: "init-0", role: "assistant", content: INITIAL_GREETING, time: "Just now" },
   ]);
@@ -91,25 +108,65 @@ export default function ChatUI() {
     });
   }, []);
 
-  // Seed the per-chat server cache with the popup name so all later
-  // /api/chat turns in this chat already know who the user is.
-  const seedNameCache = useCallback(async (sid: string, name: string) => {
+  // Seed the per-chat server cache with the popup name + vibe so all later
+  // /api/chat turns in this chat already know both.
+  const seedSessionCache = useCallback(async (sid: string, patch: { userName?: string; vibe?: Vibe }) => {
     try {
       await fetch(`/api/session/${encodeURIComponent(sid)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userName: name }),
+        body: JSON.stringify(patch),
       });
     } catch (err) {
-      console.error("Failed to seed session name cache:", err);
+      console.error("Failed to seed session cache:", err);
     }
   }, []);
 
+  const persistVibe = useCallback((v: Vibe) => {
+    setVibe(v);
+    try {
+      window.localStorage.setItem("mira-vibe", v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const handleVibeChange = useCallback(
+    (v: Vibe) => {
+      persistVibe(v);
+      setVibeOpen(false);
+      // Server cache follows immediately so the next turn uses the new vibe.
+      void seedSessionCache(sessionId, { vibe: v });
+      focusComposer();
+    },
+    [focusComposer, persistVibe, seedSessionCache, sessionId],
+  );
+
+  // Close the vibe menu on outside click / Escape.
+  useEffect(() => {
+    if (!vibeOpen) return;
+    const onPointer = (e: PointerEvent) => {
+      if (vibeMenuRef.current && !vibeMenuRef.current.contains(e.target as Node)) {
+        setVibeOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setVibeOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [vibeOpen]);
+
   const handleNameSubmit = useCallback(
-    (name: string) => {
+    (name: string, nextVibe: Vibe) => {
       const clean = name.trim().replace(/\s+/g, " ").slice(0, 30);
       if (!clean) return;
       setUserName(clean);
+      persistVibe(nextVibe);
       setShowNamePrompt(false);
       // Personalize the opening line immediately (only before chat starts).
       setTurns((prev) => {
@@ -120,10 +177,10 @@ export default function ChatUI() {
             : t,
         );
       });
-      void seedNameCache(sessionId, clean);
+      void seedSessionCache(sessionId, { userName: clean, vibe: nextVibe });
       focusComposer();
     },
-    [focusComposer, seedNameCache, sessionId],
+    [focusComposer, persistVibe, seedSessionCache, sessionId],
   );
 
   const handleNameSkip = useCallback(() => {
@@ -285,6 +342,7 @@ export default function ChatUI() {
             sessionId,
             message: text,
             userName: activeUserName || undefined,
+            vibe,
             history: currentHistory.slice(0, -1),
           }),
         });
@@ -370,8 +428,11 @@ export default function ChatUI() {
           }
 
           if (!assembledRef.current) {
-            const pool = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
-            appendAssistant(pool[0]!);
+            // English-only fallback (Hinglish replies are disabled).
+            const full = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
+            const pool = full.filter((r) => detectStyle(r) === "english");
+            const usable = pool.length > 0 ? pool : full;
+            appendAssistant(usable[Math.floor(Math.random() * usable.length)]!);
           }
           // Avatar hook: stream done → play the mood's reaction, if any.
           const reaction = MOOD_REACTIONS[faustMoodRef.current];
@@ -426,12 +487,14 @@ export default function ChatUI() {
         setFaustFailed((n) => n + 1);
         setTyping(false);
         setStreaming(false);
-        const pool = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
-        appendAssistant(pool[0]!);
+        const full = MOCK_REPLIES[local.mood] ?? MOCK_REPLIES.neutral;
+        const enPool = full.filter((r) => detectStyle(r) === "english");
+        const usable = enPool.length > 0 ? enPool : full;
+        appendAssistant(usable[Math.floor(Math.random() * usable.length)]!);
         focusComposer();
       }
     },
-    [appendAssistant, focusComposer, sessionId, streaming, turns, typing, userName]
+    [appendAssistant, focusComposer, sessionId, streaming, turns, typing, userName, vibe]
   );
 
   const onSubmit = (e: React.FormEvent) => {
@@ -527,6 +590,7 @@ export default function ChatUI() {
     setStreaming(false);
     setInput("");
     // New chat = new cache, so ask for the name again.
+    // Vibe persists (navbar shows it); the popup preselects it.
     setShowNamePrompt(true);
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
@@ -600,7 +664,7 @@ export default function ChatUI() {
 
   return (
     <div className="chat-app">
-      <NamePrompt open={showNamePrompt && welcomeDone} initialName={userName} onSubmit={handleNameSubmit} onSkip={handleNameSkip} />
+      <NamePrompt open={showNamePrompt && welcomeDone} initialName={userName} initialVibe={vibe} onSubmit={handleNameSubmit} onSkip={handleNameSkip} />
       {/* Top App Bar */}
       <header className="chat-topbar">
         <div className="chat-topbar-inner">
@@ -643,6 +707,53 @@ export default function ChatUI() {
                 </strong>
               </div>
             )}
+            <div className="vibe-pill-wrap" ref={vibeMenuRef}>
+              <button
+                type="button"
+                className="vibe-pill"
+                onClick={() => setVibeOpen((o) => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={vibeOpen}
+                title={`Reply vibe: ${VIBE_META[vibe].label} — ${VIBE_META[vibe].tagline}. Click to change.`}
+              >
+                <span
+                  className="vibe-dot"
+                  style={{ backgroundColor: VIBE_META[vibe].dot }}
+                  aria-hidden="true"
+                />
+                <span className="mood-prefix">VIBE:</span>
+                <strong className="mood-bold-name">{VIBE_META[vibe].label.toUpperCase()}</strong>
+              </button>
+              {vibeOpen && (
+                <div className="vibe-menu" role="listbox" aria-label="Reply vibe">
+                  {VIBES.map((v) => {
+                    const mv = VIBE_META[v];
+                    const selected = v === vibe;
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={`vibe-menu-item${selected ? " is-selected" : ""}`}
+                        onClick={() => handleVibeChange(v)}
+                      >
+                        <span
+                          className="vibe-dot"
+                          style={{ backgroundColor: mv.dot }}
+                          aria-hidden="true"
+                        />
+                        <span className="vibe-option-text">
+                          <strong>{mv.label}</strong>
+                          <small>{mv.tagline}</small>
+                        </span>
+                        {selected && <span aria-hidden="true">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className="reset-chat-btn"

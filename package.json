@@ -8,7 +8,8 @@
     "start": "next start --hostname 0.0.0.0",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "kb:build": "node scripts/build-kb.mjs"
+    "kb:build": "node scripts/build-kb.mjs",
+    "eval:replies": "tsx scripts/eval-replies.ts"
   },
   "dependencies": {
     "lucide-react": "^0.577.0",

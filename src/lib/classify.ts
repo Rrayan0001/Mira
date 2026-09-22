@@ -1,4 +1,4 @@
-import { getAzure, getChatDeployment } from "@/lib/azure";
+import { getAzure, getChatDeployment, isGroqActive } from "@/lib/azure";
 import { mockClassify } from "@/lib/mock-mood";
 import { normalizeMood, type ChatMessage, type MoodResult } from "@/lib/moods";
 import { MOOD_CLASSIFIER_SYSTEM } from "@/lib/prompts";
@@ -24,7 +24,17 @@ function formatHistory(history: ChatMessage[]): string {
 
 function parseMoodJson(raw: string): MoodResult {
   try {
-    const parsed = JSON.parse(raw) as {
+    // Reasoning/chat models often wrap JSON in fences — strip them first.
+    const clean = raw
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    // Tolerate prose around the object: extract the first {...} block.
+    const start = clean.indexOf("{");
+    const end = clean.lastIndexOf("}");
+    const json = start !== -1 && end !== -1 && end > start ? clean.slice(start, end + 1) : clean;
+    const parsed = JSON.parse(json) as {
       mood?: unknown;
       confidence?: unknown;
       cues?: unknown;
@@ -74,7 +84,10 @@ export async function classifyMood(
         model: getChatDeployment(),
         temperature: 0.2,
         max_tokens: 300,
-        response_format: { type: "json_object" },
+        // Groq-hosted open models don't all honor response_format — the
+        // system prompt already demands JSON-only, and parseMoodJson
+        // strips fences / extracts the object defensively.
+        ...(isGroqActive() ? {} : { response_format: { type: "json_object" } as const }),
         messages: [
           { role: "system", content: MOOD_CLASSIFIER_SYSTEM },
           {

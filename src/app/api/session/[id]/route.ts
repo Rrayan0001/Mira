@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSession, saveSession } from "@/lib/session";
+import { VIBES } from "@/lib/vibes";
 
 export const runtime = "nodejs";
 
@@ -23,18 +24,20 @@ export async function GET(
       turns: session.turns,
       stage: session.stage,
       cues: session.cues,
+      vibe: session.vibe,
     },
     { status: 200 },
   );
 }
 
-const NameBody = z.object({
-  userName: z.string().trim().min(2).max(30),
+const SeedBody = z.object({
+  userName: z.string().trim().min(2).max(30).optional(),
+  vibe: z.enum(VIBES).optional(),
 });
 
-// POST /api/session/[id] — seed the per-chat cache with the popup name.
-// Called once when the user submits the startup name popup, so every later
-// /api/chat turn in this chat already knows who they are.
+// POST /api/session/[id] — seed the per-chat cache with the popup name/vibe.
+// Called when the user submits the startup popup (and when the navbar vibe
+// changes), so every later /api/chat turn already knows both.
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -49,14 +52,20 @@ export async function POST(
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  const parsed = NameBody.safeParse(body);
+  const parsed = SeedBody.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
       { error: "invalid request", issues: parsed.error.flatten() },
       { status: 400 },
     );
   }
-  const session = saveSession(id, { userName: parsed.data.userName });
+  if (parsed.data.userName === undefined && parsed.data.vibe === undefined) {
+    return NextResponse.json({ error: "nothing to seed" }, { status: 400 });
+  }
+  const session = saveSession(id, {
+    ...(parsed.data.userName !== undefined ? { userName: parsed.data.userName } : {}),
+    ...(parsed.data.vibe !== undefined ? { vibe: parsed.data.vibe } : {}),
+  });
   return NextResponse.json(
     {
       sessionId: id,
@@ -64,6 +73,7 @@ export async function POST(
       mood: session.mood,
       turns: session.turns,
       stage: session.stage,
+      vibe: session.vibe,
     },
     { status: 200 },
   );

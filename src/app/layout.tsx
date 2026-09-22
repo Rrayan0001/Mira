@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Cormorant_Garamond, DM_Sans } from "next/font/google";
 import localFont from "next/font/local";
+import Script from "next/script";
 import "./globals.css";
 
 const serif = Cormorant_Garamond({
@@ -62,7 +63,13 @@ export default function RootLayout({
       className={`${serif.variable} ${sans.variable} ${pixel.variable}`}
     >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+        {/* beforeInteractive (not a raw <script> tag) so React never tries
+            to execute/hydrate it as component output on the client. */}
+        <Script
+          id="mira-theme-boot"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }}
+        />
       </head>
       <body suppressHydrationWarning>{children}</body>
     </html>
