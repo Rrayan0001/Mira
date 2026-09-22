@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Avatar, type FaustLoopName, type FaustStateName } from "@/lib/faust-avatar-player";
 
 type Props = {
@@ -14,6 +14,8 @@ type Props = {
   attentive: boolean;
   /** Mobile keyboard open — shrink so the feed keeps room. */
   compact: boolean;
+  /** Placement: in-flow centered above the composer, or viewport-docked. */
+  side?: "center" | "left" | "right";
 };
 
 /**
@@ -26,6 +28,7 @@ export default function FaustAvatar({
   failed,
   attentive,
   compact,
+  side = "center",
 }: Props) {
   const avatarRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Avatar | null>(null);
@@ -34,6 +37,29 @@ export default function FaustAvatar({
   useEffect(() => {
     loopRef.current = loop;
   });
+
+  // Travel waypoints for side-docked placement, driven by window events
+  // from the chat ("faust-travel"): rest → left → upper-right → center.
+  // "center" auto-glides home after a beat.
+  const [waypoint, setWaypoint] = useState<"rest" | "left" | "upper-right" | "center">("rest");
+  useEffect(() => {
+    if (side === "center") return;
+    let homeTimer: ReturnType<typeof setTimeout> | undefined;
+    const onTravel = (e: Event) => {
+      const to = (e as CustomEvent<"rest" | "left" | "upper-right" | "center">).detail;
+      if (to !== "rest" && to !== "left" && to !== "upper-right" && to !== "center") return;
+      clearTimeout(homeTimer);
+      setWaypoint(to);
+      if (to === "center") {
+        homeTimer = setTimeout(() => setWaypoint("rest"), 1800);
+      }
+    };
+    window.addEventListener("faust-travel", onTravel);
+    return () => {
+      window.removeEventListener("faust-travel", onTravel);
+      clearTimeout(homeTimer);
+    };
+  }, [side]);
 
   // Mount: create the player, greet with a wave once the sheet loads —
   // unless a chat turn is already in flight, which takes precedence.
@@ -83,8 +109,12 @@ export default function FaustAvatar({
     playerRef.current?.setAttentive(attentive);
   }, [attentive]);
 
+  const sideClass =
+    side === "left" ? " is-side-left" : side === "right" ? " is-side-right" : "";
+  const wpClass =
+    side !== "center" && waypoint !== "rest" ? ` wp-${waypoint}` : "";
   return (
-    <div className="faust-stage" aria-hidden="true">
+    <div className={`faust-stage${sideClass}${wpClass}`} aria-hidden="true">
       <div
         ref={avatarRef}
         className="faust-avatar"

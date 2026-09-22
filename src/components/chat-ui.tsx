@@ -208,7 +208,12 @@ export default function ChatUI() {
   const [faustFailed, setFaustFailed] = useState(0);
   const [faustAttentive, setFaustAttentive] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
-  const faustMoodRef = useRef<Mood>("neutral");
+
+  // Faust travel routine (side-docked): rest → left on send →
+  // upper-right while streaming → center on delivery → auto home.
+  const travel = useCallback((to: "rest" | "left" | "upper-right" | "center") => {
+    window.dispatchEvent(new CustomEvent("faust-travel", { detail: to }));
+  }, []);  const faustMoodRef = useRef<Mood>("neutral");
   const attnTimerRef = useRef<number | undefined>(undefined);
 
   const meta = MOOD_META[mood.mood] || MOOD_META.neutral;
@@ -309,6 +314,7 @@ export default function ChatUI() {
       focusComposer();
 
       setTyping(true);
+      travel("left");
 
       // Avatar hook: sent → laptop pose (loop="thinking" via typing).
       window.clearTimeout(attnTimerRef.current);
@@ -362,6 +368,7 @@ export default function ChatUI() {
           const assistantTurnId = `turn-${Date.now()}-${uid()}`;
           setTyping(false);
           setStreaming(true);
+          travel("upper-right");
           setTurns((prev) => [
             ...prev,
             { id: assistantTurnId, role: "assistant", content: "", time: nowTime() },
@@ -445,6 +452,7 @@ export default function ChatUI() {
           }
           setStreaming(false);
           focusComposer();
+          travel("center");
           return;
         }
 
@@ -481,6 +489,7 @@ export default function ChatUI() {
         }
         appendAssistant(data.reply);
         focusComposer();
+        travel("center");
       } catch (err) {
         console.error("Chat request failed:", err);
         // Avatar hook: request failed → red ✗ pose, then idle.
@@ -492,9 +501,10 @@ export default function ChatUI() {
         const usable = enPool.length > 0 ? enPool : full;
         appendAssistant(usable[Math.floor(Math.random() * usable.length)]!);
         focusComposer();
+        travel("center");
       }
     },
-    [appendAssistant, focusComposer, sessionId, streaming, turns, typing, userName, vibe]
+    [appendAssistant, focusComposer, sessionId, streaming, travel, turns, typing, userName, vibe]
   );
 
   const onSubmit = (e: React.FormEvent) => {
@@ -592,6 +602,7 @@ export default function ChatUI() {
     // New chat = new cache, so ask for the name again.
     // Vibe persists (navbar shows it); the popup preselects it.
     setShowNamePrompt(true);
+    travel("rest");
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
     }
@@ -885,6 +896,7 @@ export default function ChatUI() {
               failed={faustFailed}
               attentive={faustAttentive}
               compact={kbOpen}
+              side="right"
             />
             {renderComposer(true)}
           </footer>

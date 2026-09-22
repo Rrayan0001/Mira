@@ -1808,6 +1808,58 @@ svg { flex-shrink: 0; }
   .faust-stage { --faust-w: 120px; }
 }
 
+/* Side-docked placement: pinned to the viewport's vertical middle, floating
+   over the feed (pointer-events stay none, so taps pass through to bubbles).
+   Fixed positioning lifts her out of the footer flow, so no footer gap. */
+.faust-stage.is-side-left,
+.faust-stage.is-side-right {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 8; /* above the feed, below topbar (15+) and composer slab */
+  height: auto;
+  margin-top: 0;
+  align-items: center;
+}
+
+.faust-stage.is-side-left { left: max(10px, env(safe-area-inset-left)); }
+.faust-stage.is-side-right { right: max(10px, env(safe-area-inset-right)); }
+
+/* Travel waypoints — she glides between spots as the chat state changes
+   (rest → left on send → upper-right while streaming → center on delivery).
+   left/right/top are animatable; the hop reads as a dash with her bob. */
+.faust-stage.is-side-left,
+.faust-stage.is-side-right {
+  transition:
+    left 0.55s cubic-bezier(0.45, 0, 0.2, 1),
+    right 0.55s cubic-bezier(0.45, 0, 0.2, 1),
+    top 0.55s cubic-bezier(0.45, 0, 0.2, 1),
+    transform 0.55s cubic-bezier(0.45, 0, 0.2, 1);
+}
+
+.faust-stage.wp-left {
+  left: max(10px, env(safe-area-inset-left));
+  right: auto;
+}
+
+.faust-stage.wp-upper-right { top: 15%; }
+
+.faust-stage.wp-center {
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .faust-stage.is-side-left,
+  .faust-stage.is-side-right { transition: none; }
+}
+
+@media (max-width: 640px) {
+  .faust-stage.is-side-left,
+  .faust-stage.is-side-right { --faust-w: 84px; }
+}
+
 /* ============================================================
    DARK MODE — same neobrutalism, lights out.
    Activated via <html data-theme="dark">. Toggle persists to
