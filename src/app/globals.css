@@ -1904,6 +1904,26 @@ svg { flex-shrink: 0; }
   color: var(--text-primary) !important;
 }
 
+/* Vibe selected state uses hardcoded white text on var(--ink).
+   In dark mode --ink is bone-white, so invert text/borders to black
+   (same pattern as .welcome-sub / .reset-chat-btn above). */
+[data-theme="dark"] .vibe-menu-item.is-selected,
+[data-theme="dark"] .vibe-option.is-selected {
+  background: var(--ink);
+  color: #0a0a0a;
+}
+
+[data-theme="dark"] .vibe-menu-item.is-selected .vibe-option-text small,
+[data-theme="dark"] .vibe-option.is-selected .vibe-option-text small {
+  color: #0a0a0a;
+  opacity: 0.7;
+}
+
+[data-theme="dark"] .vibe-menu-item.is-selected .vibe-dot,
+[data-theme="dark"] .vibe-option.is-selected .vibe-dot {
+  border-color: #0a0a0a;
+}
+
 /* Scrollbars */
 [data-theme="dark"] .chat-feed-wrap::-webkit-scrollbar-track { background: var(--paper); }
 
