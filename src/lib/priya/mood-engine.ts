@@ -1,8 +1,11 @@
 /**
  * Priya mood engine — TypeScript port of backend/mood_engine.py.
- * Scoring logic is verbatim; only the session registry is new
- * (Python used a single global engine — Mira is multi-user).
+ * Scoring logic is verbatim, plus a Mira distress lexicon (sad/crying
+ * words the Python scorer never knew, so the badge stuck on happy).
+ * Session registry included (Python used one global engine).
  */
+
+import type { Mood } from "@/lib/moods";
 
 export type PriyaLabel =
   | "romantic"
@@ -101,7 +104,7 @@ const CONFLICT_WORDS: Record<string, number> = {
 const APOLOGY_WORDS = new Set([
   "sorry", "apologize", "apologise", "forgive", "my fault", "my mistake",
   "i was wrong", "won't happen again", "will make it up", "make it up to you",
-  "maaf", "maaf kardo", "sorry yaar", "acha baba",
+  "maaf", "maaf kardo", "sorry yaar", "acha baba", "my bad",
 ]);
 
 const REPAIR_PHRASES = [
@@ -156,6 +159,10 @@ const DISTRESS_WORDS: Record<string, number> = {
   cry: -2.5, crying: -3.0, cried: -2.5, sob: -2.5, sobbing: -3.0, tears: -2.0,
   grief: -2.0, grieving: -2.0, mourning: -2.0,
   failed: -1.5, failure: -1.5, flunk: -1.5, terrible: -1.0,
+  gutted: -1.5, devastated: -2.0,
+  bad: -1.2, awful: -1.5, horrible: -1.5, worst: -1.5,
+  sucks: -1.2, sucked: -1.2, meh: -1.0,
+  "not good": -1.5, "not so good": -1.5, "no good": -1.5, "n't good": -1.5,
   burnout: -1.5, "burnt out": -1.5,
   "not in mood": -2.0, "not in the mood": -2.0, "no mood": -2.0,
   "low mood": -1.5, "off mood": -1.2,
@@ -174,6 +181,21 @@ const NEGATOR_RE = /\b(not|n't|never|ain't|hardly|barely)\b/;
 
 function negatedBefore(t: string, idx: number): boolean {
   return NEGATOR_RE.test(t.slice(Math.max(0, idx - 18), idx));
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Lexicon hit test. Python used raw substring (`w in t`), which
+ * misfires on short keys ("hate" in "whatever", "nag" in "manage").
+ * Multi-word/longer keys keep substring behavior (covers inflections
+ * like "lovely" → love); short single tokens require word boundaries.
+ */
+function hasLex(t: string, w: string): boolean {
+  if (w.includes(" ") || w.length > 4) return t.includes(w);
+  return new RegExp(`\\b${escapeRegExp(w)}\\b`).test(t);
 }
 
 const SWEET_EMOJIS = ["❤", "💕", "💖", "💗", "😘", "🥰", "😍", "💋", "🤗", "✨", "🌹", "💍"];
@@ -225,26 +247,26 @@ export function scoreMessage(text: string): [number, PriyaSignals] {
   }
 
   for (const [w, v] of Object.entries(AFFECTION_WORDS)) {
-    if (t.includes(w)) {
+    if (hasLex(t, w)) {
       score += v;
       signals.affection_hits.push(w);
     }
   }
   for (const [w, v] of Object.entries(RUDE_WORDS)) {
-    if (t.includes(w)) {
+    if (hasLex(t, w)) {
       score += v;
       signals.rude_hits.push(w);
     }
   }
   for (const [w, v] of Object.entries(CONFLICT_WORDS)) {
-    if (t.includes(w)) {
+    if (hasLex(t, w)) {
       score += v;
       signals.conflict_hits.push(w);
     }
   }
 
   for (const w of APOLOGY_WORDS) {
-    if (t.includes(w)) {
+    if (hasLex(t, w)) {
       signals.apology = true;
       score += 1.0;
       break;
@@ -286,7 +308,7 @@ export function scoreMessage(text: string): [number, PriyaSignals] {
   // Distress: explicit sad/low language ("crying", "not in mood").
   // Negation-guarded so "not sad" / "never lonely" don't count.
   for (const [w, v] of Object.entries(DISTRESS_WORDS)) {
-    const idx = t.indexOf(w);
+    const idx = w.includes(" ") || w.length > 4 ? t.indexOf(w) : t.search(new RegExp(`\\b${escapeRegExp(w)}\\b`));
     if (idx !== -1 && !negatedBefore(t, idx)) {
       score += v;
       signals.distress_hits.push(w);
@@ -451,6 +473,72 @@ export class MoodEngine {
       affection_total: s.affection_total, hurt_total: s.hurt_total,
       message_count: s.message_count, fights: s.fights, repairs: s.repairs,
     };
+  }
+}
+
+// ---------- Mira mapping (badge shows the USER's mood) ----------
+
+const SIGNAL_LABELS: [keyof PriyaSignals, string][] = [
+  ["cheating_confession", "cheating confession"],
+  ["explicit_request", "boundary crossed"],
+  ["stonewall", "short reply"],
+  ["short_dry", "dry tone"],
+  ["shouting", "shouting"],
+  ["jealousy_topic", "jealousy"],
+  ["repair", "repairing"],
+  ["apology", "apologizing"],
+  ["caring", "being cared for"],
+  ["sweet_emoji", "sweet emoji"],
+  ["wholesome_intimacy", "tender moment"],
+  ["distress_acute", "acute distress"],
+  ["distress", "feeling low"],
+];
+
+export function mapPriyaToMira(update: PriyaMoodUpdate): {
+  mood: Mood;
+  confidence: number;
+  cues: string[];
+} {
+  const { label, delta, signals } = update;
+  const cues = SIGNAL_LABELS.filter(([k]) => (signals as Record<string, unknown>)[k] === true)
+    .map(([, labelText]) => labelText)
+    .slice(0, 3);
+  const fallbackCues = cues.length > 0 ? cues : ["steady tone"];
+  const noHostility = signals.rude_hits.length === 0 && signals.conflict_hits.length === 0;
+
+  // Explicit distress reflects immediately — otherwise "crying" shows happy.
+  if (signals.distress_acute && noHostility) {
+    return {
+      mood: "sad",
+      confidence: 0.9,
+      cues: cues.length > 0 ? cues : ["crying", "needs comfort"],
+    };
+  }
+  if (
+    signals.distress &&
+    noHostility &&
+    (label === "happy" || label === "playful" || label === "neutral")
+  ) {
+    const distressCues =
+      signals.distress_hits.length > 0
+        ? [...signals.distress_hits.slice(0, 2), "needs comfort"].slice(0, 3)
+        : ["feeling low", "needs comfort"];
+    return { mood: "sad", confidence: 0.8, cues: distressCues };
+  }
+
+  switch (label) {
+    case "romantic":
+    case "happy":
+    case "playful":
+      return { mood: "happy", confidence: delta >= 2 ? 0.9 : 0.85, cues: fallbackCues };
+    case "neutral":
+      return { mood: "neutral", confidence: 0.6, cues: fallbackCues };
+    case "annoyed":
+      return { mood: "angry", confidence: 0.8, cues };
+    case "upset":
+      return { mood: "sad", confidence: 0.8, cues };
+    case "angry":
+      return { mood: "angry", confidence: 0.9, cues };
   }
 }
 

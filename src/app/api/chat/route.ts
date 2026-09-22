@@ -4,8 +4,13 @@ import { SAFETY_REPLY, isSafetyTriggered } from "@/lib/safety";
 import { computeStage, extractName, getSession, saveSession } from "@/lib/session";
 import { DEFAULT_VIBE, VIBES } from "@/lib/vibes";
 import type { ChatMessage, Mood, Stage } from "@/lib/moods";
-import { priyaChat } from "@/lib/priya";
-import { templateReply } from "@/lib/priya/reply-engine";
+import { getMoodEngine, mapPriyaToMira, type PriyaSignals } from "@/lib/priya/mood-engine";
+import {
+  buildMiraMasterPrompt,
+  groqTurn,
+  summarizeTurns,
+} from "@/lib/priya/groq-reply";
+import { pickEmergencyReply } from "@/lib/priya/fallback";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +32,38 @@ const Body = z.object({
 
 function sseFrame(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+function signalLine(signals: PriyaSignals): string {
+  const keys: (keyof PriyaSignals)[] = [
+    "cheating_confession",
+    "explicit_request",
+    "stonewall",
+    "short_dry",
+    "shouting",
+    "jealousy_topic",
+    "repair",
+    "apology",
+    "caring",
+    "sweet_emoji",
+    "wholesome_intimacy",
+    "distress_acute",
+    "distress",
+  ];
+  const sigLine = keys
+    .filter((k) => (signals as Record<string, unknown>)[k] === true)
+    .join(", ");
+  // Hit words carry the actual topic (e.g. conflict: "ex") — the model
+  // needs them, otherwise "my ex texted me" reads as generic happy.
+  const hits: string[] = [];
+  for (const [label, arr] of [
+    ["rude", signals.rude_hits],
+    ["conflict", signals.conflict_hits],
+    ["affection", signals.affection_hits],
+  ] as const) {
+    if (arr.length > 0) hits.push(`${label}: ${arr.slice(0, 3).join(", ")}`);
+  }
+  return [sigLine, ...hits].filter(Boolean).join("; ");
 }
 
 export async function POST(req: Request) {
@@ -83,13 +120,37 @@ export async function POST(req: Request) {
   const turnCount = Math.max((prevSession?.turns ?? 0) + 1, clientTurns);
   const currentStage: Stage = computeStage(turnCount);
 
+  // 3. Mood: deterministic scorer (instant badge, no LLM, no retrieval).
+  let msg = message.trim();
+  if (msg.length > 500) msg = msg.slice(0, 500);
+  const engine = getMoodEngine(sessionId);
+  const moodUpdate = engine.update(msg, 0);
+  const mapped = mapPriyaToMira(moodUpdate);
+
+  const recentAssistant = history
+    .filter((h) => h.role === "assistant")
+    .slice(-3)
+    .map((h) => h.content);
+  const system = buildMiraMasterPrompt({
+    miraMood: mapped.mood,
+    priyaLabel: moodUpdate.label,
+    priyaScore: moodUpdate.score,
+    signalLine: signalLine(moodUpdate.signals),
+    userName: currentUserName,
+    vibe: currentVibe,
+    stage: currentStage,
+    history,
+    summary: prevSession?.summary || "",
+    recentReplies: recentAssistant,
+  });
+
   const encoder = new TextEncoder();
   let fullReply = "";
-  let detectedMood: Mood = prevSession?.mood ?? "neutral";
-  let detectedConfidence = 0.6;
-  let detectedCues: string[] = [];
+  let replySource = "groq";
+  const detectedMood: Mood = mapped.mood;
+  const detectedConfidence = mapped.confidence;
+  const detectedCues: string[] = mapped.cues;
   const detectedStage: Stage = currentStage;
-  let replySource = "priya";
 
   let isClosed = false;
   const stream = new ReadableStream<Uint8Array>({
@@ -107,33 +168,24 @@ export async function POST(req: Request) {
       };
 
       try {
-        // Priya brain: mood+RAG+templates, Groq gpt-oss-120b for novel turns.
-        const result = await priyaChat({
-          sessionId,
-          message,
-          userName: currentUserName || undefined,
-          vibe: currentVibe,
-          turnCount,
+        // Full-Groq turn: master prompt carries mood + vibe + memory.
+        const result = await groqTurn({
+          system,
+          userMsg: msg,
+          history,
+          signals: moodUpdate.signals,
+          lastAssistant: recentAssistant,
         });
 
-        detectedMood = result.miraMood;
-        detectedConfidence = result.confidence;
-        detectedCues = result.cues;
-        replySource = result.source;
-        fullReply = result.reply;
-        if (result.memories.length > 0) {
-          // Memory explainability (not sent to client; server log only).
-          console.log(
-            JSON.stringify({
-              sessionId,
-              source: result.source,
-              priya: `${result.priyaLabel}/${result.priyaScore}${result.priyaEmoji}`,
-              mem: result.memories.map((m) => m.id),
-            }),
-          );
+        if (result) {
+          fullReply = result.reply;
+          replySource = result.source;
+        } else {
+          fullReply = pickEmergencyReply(recentAssistant);
+          replySource = "emergency-fallback";
         }
 
-        // Emit initial metadata frame (mood is deterministic — no META parse).
+        // Emit initial metadata frame (mood is deterministic).
         send({
           mood: detectedMood,
           confidence: detectedConfidence,
@@ -160,33 +212,9 @@ export async function POST(req: Request) {
         });
       } catch (err) {
         if (!isClosed) {
-          console.error("Priya brain failed, using template fallback:", err);
-          // On-voice template fallback (never the old generic engine).
-          try {
-            const fallback = templateReply({
-              mood: "neutral",
-              name: currentUserName || "babe",
-              memories: [],
-              signals: {
-                affection_hits: [], rude_hits: [], conflict_hits: [], distress_hits: [],
-                apology: false, repair: false, caring: false,
-                jealousy_topic: false, short_dry: false, shouting: false,
-                sweet_emoji: false, explicit_request: false,
-                wholesome_intimacy: false, stonewall: false,
-                distress: false, distress_acute: false,
-              },
-              msg: message,
-              lastReply: "",
-              recents: [],
-              lastTopic: "",
-              history: [],
-            });
-            fullReply = fallback;
-            replySource = "template-fallback";
-          } catch {
-            fullReply = "I'm right here with you. Tell me a little more about what's on your mind?";
-            replySource = "static-fallback";
-          }
+          console.error("Groq turn failed, using emergency fallback:", err);
+          fullReply = pickEmergencyReply(recentAssistant);
+          replySource = "emergency-fallback";
 
           send({
             mood: detectedMood,
@@ -213,6 +241,15 @@ export async function POST(req: Request) {
         }
       } finally {
         try {
+          // Rolling summary every 8 turns — memory without RAG.
+          let summary = prevSession?.summary ?? "";
+          if (turnCount % 8 === 0 && fullReply) {
+            const next = await summarizeTurns(
+              [...history, { role: "user", content: msg } as ChatMessage],
+              currentUserName,
+            );
+            if (next) summary = next;
+          }
           saveSession(sessionId, {
             userName: currentUserName || undefined,
             mood: detectedMood,
@@ -221,6 +258,7 @@ export async function POST(req: Request) {
             stage: detectedStage,
             turns: turnCount,
             vibe: currentVibe,
+            summary,
           });
         } catch (err) {
           console.error("session save failed:", err);

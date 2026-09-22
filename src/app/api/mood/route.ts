@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { classifyMood } from "@/lib/classify";
+import { MoodEngine, mapPriyaToMira } from "@/lib/priya/mood-engine";
 
 export const runtime = "nodejs";
 
@@ -33,15 +33,21 @@ export async function POST(req: Request) {
     );
   }
 
-  const { message, history } = parsed.data;
-  // classifyMood never throws: returns neutral fallback on Azure/RAG failure.
-  // Always 200 to the UI per spec (missing env vars surface as 500 at import).
-  const result = await classifyMood(message, history.slice(-10));
-  return NextResponse.json(result, { status: 200 });
+  // Stateless probe: fresh throwaway engine (no session mutation —
+  // the chat turn itself performs the real engine update).
+  const { message } = parsed.data;
+  let msg = message.trim();
+  if (msg.length > 500) msg = msg.slice(0, 500);
+  const update = new MoodEngine().update(msg, 0);
+  const mapped = mapPriyaToMira(update);
+  return NextResponse.json(
+    { mood: mapped.mood, confidence: mapped.confidence, cues: mapped.cues },
+    { status: 200 },
+  );
 }
 
-// The frontend probes HEAD /api/mood to auto-detect a live backend
-// (see chat-ui.tsx). Answer without touching Azure.
+// The frontend probes HEAD /api/mood to auto-detect a live backend.
+// Answer without touching any brain.
 export async function HEAD() {
   return new Response(null, { status: 200 });
 }
